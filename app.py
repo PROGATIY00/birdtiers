@@ -6,7 +6,7 @@ import os
 import threading
 
 # --- CONFIGURATION ---
-TOKEN = os.getenv("DISCORD_TOKEN", "YOUR_BOT_TOKEN_HERE") 
+TOKEN = os.getenv("DISCORD_TOKEN", "MTQ5NzI5OTg5MTc1ODgyNTQ3Mg.GLlGY5.Uz223Kk9P43h3kaypRcr5201DbQ7KBhHqxggTo") 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
 TIER_LIST = ["HT1", "LT1", "HT2", "LT2", "HT3", "LT3", "HT4", "LT4", "HT5", "LT5", "RETIRED"]
 TIER_DATA = {
