@@ -1,0 +1,203 @@
+{
+    "players": [
+        {
+            "username": "Swight",
+            "gamemode": "Axe",
+            "tier": "LT2"
+        },
+        {
+            "username": "G4lactic4l",
+            "gamemode": "Sword",
+            "tier": "LT5",
+            "region": "EU"
+        },
+        {
+            "username": "G4lactic4l",
+            "gamemode": "Crystal",
+            "tier": "LT5",
+            "region": "EU"
+        },
+        {
+            "username": "Swight",
+            "gamemode": "Mace",
+            "tier": "HT3"
+        },
+        {
+            "username": "Swight",
+            "gamemode": "UHC",
+            "tier": "HT2"
+        },
+        {
+            "username": "flowtives",
+            "gamemode": "Sword",
+            "tier": "LT2"
+        },
+        {
+            "username": "Tenchoblade",
+            "gamemode": "1.8",
+            "tier": "HT1"
+        },
+        {
+            "username": "Swight",
+            "gamemode": "Sword",
+            "tier": "LT3"
+        },
+        {
+            "username": "Dream",
+            "gamemode": "1.8",
+            "tier": "LT2"
+        },
+        {
+            "username": "Dream",
+            "gamemode": "Crystal",
+            "tier": "LT4"
+        },
+        {
+            "username": "Drdonutt",
+            "gamemode": "Crystal",
+            "tier": "LT3"
+        },
+        {
+            "username": "Jesticc",
+            "gamemode": "Crystal",
+            "tier": "LT4"
+        },
+        {
+            "username": "Drdonutt",
+            "gamemode": "SMP",
+            "tier": "LT5"
+        },
+        {
+            "username": "ManePear",
+            "gamemode": "Spear",
+            "tier": "HT4",
+            "region": "NA"
+        },
+        {
+            "username": "Dream",
+            "gamemode": "UHC",
+            "tier": "HT3"
+        },
+        {
+            "username": "Flamefrags",
+            "gamemode": "SMP",
+            "tier": "LT3"
+        },
+        {
+            "username": "flowtives",
+            "gamemode": "SMP",
+            "tier": "LT1"
+        },
+        {
+            "username": "K1RBE",
+            "gamemode": "Crystal",
+            "tier": "HT1"
+        },
+        {
+            "username": "Theobaldthebird",
+            "gamemode": "Cart",
+            "tier": "LT3"
+        },
+        {
+            "username": "Yorxy_",
+            "gamemode": "Sword",
+            "tier": "LT5",
+            "region": "EU"
+        },
+        {
+            "username": "Yorxy_",
+            "gamemode": "Trident",
+            "tier": "LT5",
+            "region": "EU"
+        },
+        {
+            "username": "Itzrealme",
+            "gamemode": "UHC",
+            "tier": "LT1"
+        },
+        {
+            "username": "Itzrealme",
+            "gamemode": "Pot",
+            "tier": "HT1"
+        },
+        {
+            "username": "Itzrealme",
+            "gamemode": "Crystal",
+            "tier": "LT1"
+        },
+        {
+            "username": "Itzrealme",
+            "gamemode": "Sword",
+            "tier": "LT3"
+        },
+        {
+            "username": "Yorxy_",
+            "gamemode": "1.8",
+            "tier": "LT5",
+            "region": "EU"
+        },
+        {
+            "username": "ManePear",
+            "gamemode": "Crystal",
+            "tier": "HT1",
+            "region": "NA"
+        },
+        {
+            "username": "Yorxy_",
+            "gamemode": "Crystal",
+            "tier": "LT4",
+            "region": "EU"
+        },
+        {
+            "username": "Yorxy_",
+            "gamemode": "Cart",
+            "tier": "LT5",
+            "region": "EU"
+        },
+        {
+            "username": "G4lactic4l",
+            "gamemode": "UHC",
+            "tier": "LT5",
+            "region": "EU"
+        },
+        {
+            "username": "AlienOverdose",
+            "gamemode": "Mace",
+            "tier": "HT1",
+            "region": "EU"
+        },
+        {
+            "username": "Farex_x",
+            "gamemode": "Crystal",
+            "tier": "HT3",
+            "region": "EU"
+        },
+        {
+            "username": "Manepear",
+            "gamemode": "Mace",
+            "tier": "HT5",
+            "region": "NA"
+        },
+        {
+            "username": "corpse3_",
+            "gamemode": "Sword",
+            "tier": "LT5",
+            "region": "EU"
+        },
+        {
+            "username": "corpse3_",
+            "gamemode": "UHC",
+            "tier": "LT5",
+            "region": "EU"
+        },
+        {
+            "username": "coldified",
+            "gamemode": "Mace",
+            "tier": "LT1",
+            "region": "EU"
+        }
+    ],
+    "banned": [
+        "Marlowww"
+    ]
+}
