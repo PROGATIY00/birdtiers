@@ -1,2 +1,4 @@
 Flask
+discord.py
+gunicornFlask
 gunicorn
