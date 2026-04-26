@@ -54,7 +54,7 @@ async def retire(interaction: discord.Interaction, name: str, mode: app_commands
 
 # --- WEB UI ---
 app = Flask(__name__)
-app.secret_key = "birdtiers_text_tilt_v6"
+app.secret_key = "birdtiers_legacy_final"
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -77,36 +77,31 @@ HTML_TEMPLATE = """
 
         .wrapper { max-width: 900px; margin: auto; padding: 25px; }
 
-        /* Profile Card */
         .profile-card { background: linear-gradient(145deg, #1a1d29, #14171f); border: 2px solid var(--accent); border-radius: 18px; padding: 25px; margin-bottom: 30px; display: flex; gap: 25px; align-items: center; }
         
         .tier-box { 
             background: rgba(0,0,0,0.3); 
-            padding: 8px; 
+            padding: 10px; 
             border-radius: 8px; 
             font-size: 11px; 
             border: 1px solid var(--border); 
             text-align: center;
-            overflow: hidden;
         }
 
-        /* TEXT TILT LOGIC */
-        .retired-text {
+        /* --- THE SPECIFIC REQUESTED STYLE --- */
+        .legacy-tier {
             display: inline-block;
-            color: #555 !important;
-            opacity: 0.6;
-            transform: rotate(-12deg) scale(0.9); /* Tilts the LT3 text specifically */
-            text-decoration: line-through;
-            font-style: italic;
-            margin-top: 2px;
+            color: var(--dim) !important;
+            font-style: italic; /* Italicized */
+            transform: skewX(-10deg); /* The "tilted" look for text */
+            font-weight: 400;
+            opacity: 0.7;
         }
 
         .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 20px; margin-bottom: 8px; display: grid; grid-template-columns: 40px 45px 1fr 70px 110px; align-items: center; text-decoration: none; color: inherit; transition: 0.15s; }
         .player-row:hover { border-color: var(--accent); transform: translateX(5px); }
         .retired-row { opacity: 0.4; filter: grayscale(1); }
         .tier-badge { background: #1c1f26; padding: 5px 10px; border-radius: 6px; border: 1px solid #2d313d; text-align: center; font-weight: 800; font-size: 12px; }
-        .na { color: #e74c3c; font-weight: 800; }
-        .eu { color: #2ecc71; font-weight: 800; }
     </style>
 </head>
 <body>
@@ -136,7 +131,7 @@ HTML_TEMPLATE = """
                     {% for r in spotlight.ranks %}
                     <div class="tier-box">
                         <span style="color:var(--dim); font-size:10px;">{{r.gamemode}}</span><br>
-                        <b class="{% if r.retired %}retired-text{% endif %}" style="color:var(--accent); font-size:14px;">{{r.tier}}</b>
+                        <b class="{% if r.retired %}legacy-tier{% endif %}" style="color:var(--accent); font-size:15px;">{{r.tier}}</b>
                     </div>
                     {% endfor %}
                 </div>
@@ -148,7 +143,7 @@ HTML_TEMPLATE = """
             <div style="font-weight:800; color:var(--accent)">{% if p.retired %}💀{% else %}#{{ loop.index }}{% endif %}</div>
             <img src="https://minotar.net/helm/{{p.username}}/35.png" style="border-radius:5px;">
             <div><b>{{ p.username }}</b><br><small style="color:var(--dim)">{{ p.points }} Pts</small></div>
-            <div class="{{ p.region.lower() }}">{{ p.region }}</div>
+            <div style="color:var(--dim); font-size:12px;">{{ p.region }}</div>
             <div class="tier-badge">{% if p.retired %}RETIRED{% else %}{{ p.tier if current_mode else 'ACTIVE' }}{% endif %}</div>
         </a>
         {% endfor %}
