@@ -4,7 +4,26 @@ from flask import Flask, render_template_string, request, redirect, session, url
 import json
 import os
 import threading
+from pymongo import MongoClient
 
+# Add this to your Environment Variables on Render as MONGO_URI
+MONGO_URI = os.getenv("IL0WWRVucOYmBDme")
+client = MongoClient(MONGO_URI)
+db_mongo = client['birdtiers_db']
+players_col = db_mongo['players']
+
+def load_db():
+    # Fetch all players from MongoDB
+    players = list(players_col.find({}, {'_id': 0}))
+    return {"players": players}
+
+def save_db(data):
+    # This is slightly different; we usually update specific players 
+    # instead of overwriting the whole file.
+    # For a quick fix, we wipe and re-insert (not ideal but works for small lists)
+    players_col.delete_many({})
+    if data['players']:
+        players_col.insert_many(data['players'])
 # --- CONFIGURATION ---
 TOKEN = os.getenv("DISCORD_TOKEN", "MTQ5NzI5OTg5MTc1ODgyNTQ3Mg.GLlGY5.Uz223Kk9P43h3kaypRcr5201DbQ7KBhHqxggTo") 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
