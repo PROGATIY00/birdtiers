@@ -8,7 +8,7 @@ import threading
 # --- CONFIGURATION ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
-LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
+# Removed LOG_CHANNEL_ID as we are no longer sending update messages to Discord
 MAINTENANCE_MODE = os.getenv("MAINTENANCE_MODE", "False").lower() == "true"
 
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
@@ -40,21 +40,26 @@ async def rank(interaction: discord.Interaction, name: str, mode: app_commands.C
         {"$set": {"username": name, "gamemode": mode.value, "tier": tier_up, "region": region.upper(), "retired": False}},
         upsert=True
     )
-    await interaction.response.send_message(f"✅ Updated {name}", ephemeral=True)
+    # Only responds to the admin who used the command
+    await interaction.response.send_message(f"✅ Updated {name} to {tier_up} in {mode.value}.", ephemeral=True)
 
 @bot.tree.command(name="retire", description="Retire player from mode or globally")
 @app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES] + [app_commands.Choice(name="Global", value="all")])
 async def retire(interaction: discord.Interaction, name: str, mode: app_commands.Choice[str]):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+    
     query = {"username": {"$regex": f"^{name}$", "$options": "i"}}
-    if mode.value != "all": query["gamemode"] = mode.value
+    if mode.value != "all": 
+        query["gamemode"] = mode.value
+    
     players_col.update_many(query, {"$set": {"retired": True}})
-    await interaction.response.send_message(f"💀 Retired {name} ({mode.value})", ephemeral=False)
+    # Only responds to the admin who used the command
+    await interaction.response.send_message(f"💀 Retired {name} ({mode.value}).", ephemeral=True)
 
 # --- WEB UI ---
 app = Flask(__name__)
-app.secret_key = "birdtiers_strikethrough_final"
+app.secret_key = "birdtiers_silent_updates"
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -88,15 +93,14 @@ HTML_TEMPLATE = """
             text-align: center;
         }
 
-        /* --- THE REQUESTED STYLE: BOLD, STRIPED, TILTED --- */
         .legacy-tier {
             display: inline-block;
-            color: #666 !important; /* Dimmed Gray */
-            font-weight: 800; /* Bold */
-            font-style: italic; /* Italic */
-            text-decoration: line-through; /* Strikethrough */
+            color: #666 !important;
+            font-weight: 800;
+            font-style: italic;
+            text-decoration: line-through;
             text-decoration-thickness: 2px;
-            transform: skewX(-15deg); /* Tilted Look */
+            transform: skewX(-15deg);
             opacity: 0.6;
         }
 
