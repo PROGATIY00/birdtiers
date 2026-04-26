@@ -12,25 +12,106 @@ MONGO_URI = os.getenv("MONGO_URI")
 # This looks for a setting in Render; if it doesn't find it, it defaults to False
 MAINTENANCE_MODE = os.getenv("MAINTENANCE_MODE", "False").lower() == "true"
 
+# Database Setup
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)
 db_mongo = client['birdtiers_db']
 players_col = db_mongo['players']
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
-TIER_DATA = {"HT1":100, "LT1":90, "HT2":80, "LT2":70, "HT3":60, "LT3":50, "HT4":40, "LT4":30, "HT5":20, "LT5":10, "RETIRED":0}
+TIER_DATA = {
+    "HT1": 100, "LT1": 90, "HT2": 80, "LT2": 70, "HT3": 60, 
+    "LT3": 50, "HT4": 40, "LT4": 30, "HT5": 20, "LT5": 10, "RETIRED": 0
+}
 
-app = Flask(__name__)
-app.secret_key = "birdtiers_final_v4"
-
-# --- DISCORD BOT ---
+# --- DISCORD BOT SETUP ---
 class MyBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.default())
+        intents = discord.Intents.default()
+        super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
-    async def setup_hook(self): await self.tree.sync()
+
+    async def setup_hook(self):
+        print("🚀 Syncing Slash Commands...")
+        try:
+            await self.tree.sync()
+            print("✅ Slash Commands Synced Globally!")
+        except Exception as e:
+            print(f"❌ Sync Error: {e}")
+
 bot = MyBot()
 
-# --- WEB UI ---
+# --- DATABASE HELPERS ---
+def update_db(name, mode, tier, reg):
+    # Ensure region is consistent across all entries for this user
+    players_col.update_many(
+        {"username": {"$regex": f"^{name}$", "$options": "i"}}, 
+        {"$set": {"region": reg.upper()}}
+    )
+    # Update or insert specific gamemode rank
+    players_col.update_one(
+        {"username": {"$regex": f"^{name}$", "$options": "i"}, "gamemode": mode},
+        {"$set": {"username": name, "gamemode": mode, "tier": tier.upper(), "region": reg.upper()}},
+        upsert=True
+    )
+
+# --- DISCORD SLASH COMMANDS ---
+
+@bot.tree.command(name="rank", description="Set a player's rank and region")
+@app_commands.describe(name="Username", mode="Gamemode", tier="Rank (HT1-LT5)", region="NA or EU")
+async def rank(interaction: discord.Interaction, name: str, mode: str, tier: str, region: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+    
+    mode_cap = mode.capitalize()
+    tier_up = tier.upper()
+    
+    if mode_cap not in MODES:
+        return await interaction.response.send_message(f"❌ Invalid mode. Choose from: {', '.join(MODES)}", ephemeral=True)
+
+    update_db(name, mode_cap, tier_up, region)
+    
+    embed = discord.Embed(title="📈 Tier Updated", color=0x5e6ad2)
+    embed.add_field(name="Player", value=name, inline=True)
+    embed.add_field(name="Mode", value=mode_cap, inline=True)
+    embed.add_field(name="Tier", value=tier_up, inline=True)
+    embed.set_thumbnail(url=f"https://minotar.net/helm/{name}/64.png")
+    
+    await interaction.response.send_message(f"✅ Updated **{name}** to **{tier_up}** in **{mode_cap}**", ephemeral=True)
+    
+    if LOG_CHANNEL_ID:
+        channel = bot.get_channel(int(LOG_CHANNEL_ID))
+        if channel: await channel.send(embed=embed)
+
+@bot.tree.command(name="retire", description="Move a player to Retired status")
+async def retire(interaction: discord.Interaction, name: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Admin only!", ephemeral=True)
+        
+    players_col.update_many({"username": {"$regex": f"^{name}$", "$options": "i"}}, {"$set": {"tier": "RETIRED"}})
+    
+    embed = discord.Embed(title="💀 Player Retired", description=f"**{name}** is now a Retired Legend.", color=0x333333)
+    await interaction.response.send_message(f"💀 {name} retired.", ephemeral=False)
+    
+    if LOG_CHANNEL_ID:
+        channel = bot.get_channel(int(LOG_CHANNEL_ID))
+        if channel: await channel.send(embed=embed)
+
+@bot.tree.command(name="check", description="View all ranks for a player")
+async def check(interaction: discord.Interaction, name: str):
+    data = list(players_col.find({"username": {"$regex": f"^{name}$", "$options": "i"}}))
+    if not data:
+        return await interaction.response.send_message("❌ Player not found.", ephemeral=True)
+    
+    embed = discord.Embed(title=f"🛡️ Profile: {data[0]['username']}", color=0x2ecc71)
+    for entry in data:
+        embed.add_field(name=entry['gamemode'], value=entry['tier'], inline=True)
+    
+    await interaction.response.send_message(embed=embed)
+
+# --- WEB SERVER (FLASK) ---
+app = Flask(__name__)
+app.secret_key = "birdtiers_2026_production"
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -39,55 +120,50 @@ HTML_TEMPLATE = """
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600&display=swap');
         :root { --bg: #0b0c10; --card: #14171f; --border: #262932; --accent: #5e6ad2; --text: #e0e6ed; --dim: #8b949e; }
-        body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; overflow-x: hidden; }
-        
-        /* Navbar & Search */
+        body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
         .navbar { background: #0f1117; padding: 15px 50px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position: sticky; top:0; z-index: 100;}
-        .logo { color: white; font-weight: 600; font-size: 24px; text-decoration: none; text-transform: uppercase; }
+        .logo { color: white; font-weight: 600; font-size: 24px; text-decoration: none; text-transform: uppercase; letter-spacing: 1px;}
         .logo span { color: var(--accent); }
-        .search-input { background: #0b0c10; border: 1px solid var(--border); padding: 8px 15px; border-radius: 20px; color: white; outline: none; width: 220px; }
+        .search-input { background: #0b0c10; border: 1px solid var(--border); padding: 8px 18px; border-radius: 20px; color: white; outline: none; width: 220px; transition: 0.3s;}
+        .search-input:focus { border-color: var(--accent); width: 280px; }
         
-        /* Gamemode Navigation */
         .mode-nav { display: flex; gap: 10px; flex-wrap: wrap; padding: 15px 50px; background: #0f1117; border-bottom: 1px solid var(--border); justify-content: center; }
-        .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 13px; transition: 0.2s; }
+        .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 13px; font-weight: 600; transition: 0.2s; }
         .mode-btn:hover, .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
 
         .wrapper { max-width: 900px; margin: auto; padding: 30px; }
         
-        /* Profile Spotlight Card */
-        .profile-card { background: linear-gradient(145deg, #1a1d29, #14171f); border: 2px solid var(--accent); border-radius: 20px; padding: 25px; margin-bottom: 30px; display: flex; gap: 25px; align-items: center; animation: slideIn 0.3s ease-out; }
-        @keyframes slideIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
-        .big-head { width: 80px; height: 80px; border-radius: 12px; border: 2px solid #2d313d; }
-        .namemc-btn { background: white; color: black; padding: 5px 12px; border-radius: 6px; text-decoration: none; font-size: 11px; font-weight: 600; margin-top: 10px; display: inline-block; }
+        .profile-card { background: linear-gradient(145deg, #1a1d29, #14171f); border: 2px solid var(--accent); border-radius: 20px; padding: 30px; margin-bottom: 40px; display: flex; gap: 30px; align-items: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .big-head { width: 90px; height: 90px; border-radius: 12px; border: 2px solid #2d313d; }
+        .namemc-btn { background: white; color: black; padding: 5px 15px; border-radius: 6px; text-decoration: none; font-size: 12px; font-weight: 600; margin-top: 10px; display: inline-block; }
 
-        /* Leaderboard Rows */
         .player-row { 
             background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 20px; margin-bottom: 8px; 
             display: grid; grid-template-columns: 50px 50px 1fr 80px 120px; align-items: center; 
             text-decoration: none; color: inherit; transition: 0.2s;
         }
-        .player-row:hover { border-color: var(--accent); transform: translateX(5px); background: #1c1f2b; }
+        .player-row:hover { border-color: var(--accent); transform: translateX(8px); background: #1c1f2b; }
         .retired-player { opacity: 0.35; filter: grayscale(1); }
-        .avatar { width: 38px; height: 38px; border-radius: 6px; }
-        .tier-badge { background: #1c1f26; padding: 5px 10px; border-radius: 6px; border: 1px solid #2d313d; text-align: center; font-weight: 600; font-size: 13px;}
+        .avatar { width: 40px; height: 40px; border-radius: 8px; }
+        .tier-badge { background: #1c1f26; padding: 6px 12px; border-radius: 8px; border: 1px solid #2d313d; text-align: center; font-weight: 600; }
         
-        .na { color: #e74c3c; font-weight: 800; font-size: 11px; }
-        .eu { color: #2ecc71; font-weight: 800; font-size: 11px; }
+        .na { color: #e74c3c; font-weight: 800; }
+        .eu { color: #2ecc71; font-weight: 800; }
         
         .maint-screen { text-align: center; margin-top: 100px; }
-        .maint-screen h1 { font-size: 40px; color: var(--accent); }
+        .maint-screen h1 { font-size: 50px; color: var(--accent); }
     </style>
 </head>
 <body>
     <div class="navbar">
         <a href="/" class="logo">BIRD<span>TIERS</span></a>
-        <form action="/" method="GET"><input type="text" name="search" class="search-input" placeholder="Search player..." value="{{ search_query }}"></form>
+        <form action="/" method="GET"><input type="text" name="search" class="search-input" placeholder="Search for player..." value="{{ search_query }}"></form>
     </div>
     
     {% if maint and not session.get('admin') %}
     <div class="wrapper maint-screen">
         <h1>🛠️ MAINTENANCE</h1>
-        <p>Updating the leaderboard. We'll be back soon!</p>
+        <p>Site is locked while we update rankings. Follow Discord for news.</p>
     </div>
     {% else %}
     
@@ -102,14 +178,14 @@ HTML_TEMPLATE = """
         {% if spotlight %}
         <div class="profile-card">
             <div style="text-align:center;">
-                <img src="https://minotar.net/helm/{{spotlight.username}}/80.png" class="big-head">
+                <img src="https://minotar.net/helm/{{spotlight.username}}/90.png" class="big-head">
                 <a href="https://namemc.com/profile/{{spotlight.username}}" target="_blank" class="namemc-btn">NameMC</a>
             </div>
             <div style="flex-grow:1;">
-                <h2 style="margin:0;">{{ spotlight.username }}</h2>
-                <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap:8px; margin-top:12px;">
+                <h1 style="margin:0;">{{ spotlight.username }}</h1>
+                <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap:10px; margin-top:15px;">
                     {% for m, t in spotlight.ranks.items() %}
-                    <div style="background:rgba(0,0,0,0.3); padding:6px; border-radius:6px; font-size:11px; border:1px solid var(--border); text-align:center;">
+                    <div style="background:rgba(0,0,0,0.3); padding:8px; border-radius:10px; font-size:12px; border:1px solid var(--border); text-align:center;">
                         {{m}}<br><b style="color:{% if t == 'RETIRED' %}var(--dim){% else %}var(--accent){% endif %}">{{t}}</b>
                     </div>
                     {% endfor %}
@@ -118,8 +194,8 @@ HTML_TEMPLATE = """
         </div>
         {% endif %}
 
-        <h3 style="color:var(--dim); text-transform:uppercase; font-size:14px; letter-spacing:1px;">
-            Ranking: {{ current_mode if current_mode else 'Global Points' }}
+        <h3 style="color:var(--dim); text-transform:uppercase; font-size:13px; letter-spacing:2px; margin-bottom: 20px;">
+            Leaderboard: {{ current_mode if current_mode else 'Overall Power' }}
         </h3>
 
         {% for p in players %}
@@ -127,7 +203,7 @@ HTML_TEMPLATE = """
             <div style="font-weight:800; color:{% if not p.is_active %}var(--dim){% else %}var(--accent){% endif %}">
                 {% if not p.is_active %}💀{% else %}#{{ loop.index }}{% endif %}
             </div>
-            <img src="https://minotar.net/helm/{{p.username}}/38.png" class="avatar">
+            <img src="https://minotar.net/helm/{{p.username}}/40.png" class="avatar">
             <div><b>{{ p.username }}</b><br><small style="color:var(--dim)">{{ p.points }} {{ 'Pts' if not current_mode else '' }}</small></div>
             <div class="{{ p.region.lower() }}">{{ p.region }}</div>
             <div class="tier-badge">{% if not p.is_active %}RETIRED{% else %}{{ p.tier if current_mode else 'ACTIVE' }}{% endif %}</div>
@@ -156,7 +232,9 @@ def index():
             if p.get('tier') != "RETIRED": stats[u]["active"] = True
             stats[u]["points"] += TIER_DATA.get(p.get('tier'), 0)
 
-    processed = sorted([{"username": u, "points": d['points'], "region": d['region'], "is_active": d['active'], "tier": d.get('tier')} for u, d in stats.items() if u], key=lambda x: (not x['is_active'], -x['points'] if not mode_filter else 0))
+    # Sort: Active first, then by points
+    processed = sorted([{"username": u, "points": d['points'], "region": d['region'], "is_active": d['active'], "tier": d.get('tier')} for u, d in stats.items() if u], 
+                       key=lambda x: (not x['is_active'], -x['points'] if not mode_filter else 0))
     
     spotlight = None
     if search_q:
@@ -171,6 +249,11 @@ def login():
     session['admin'] = True
     return redirect('/')
 
+# --- STARTUP ---
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+
 if __name__ == '__main__':
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000))), daemon=True).start()
+    # Threading prevents the bot and website from blocking each other
+    threading.Thread(target=run_flask, daemon=True).start()
     bot.run(TOKEN)
