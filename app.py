@@ -24,7 +24,7 @@ TIER_DATA = {
 }
 
 app = Flask(__name__)
-app.secret_key = "birdtiers_search_v1"
+app.secret_key = "birdtiers_profile_v2"
 
 # --- DATABASE HELPERS ---
 def get_all_players():
@@ -55,26 +55,42 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>BIRDTIERS | Elite</title>
+    <title>BIRDTIERS | Rankings</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600&display=swap');
         :root { --bg: #0b0c10; --card: #14171f; --border: #262932; --accent: #5e6ad2; --text: #e0e6ed; --dim: #8b949e; }
         body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
-        .navbar { background: #0f1117; padding: 15px 50px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+        .navbar { background: #0f1117; padding: 15px 50px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position: sticky; top:0; z-index: 100;}
         .logo { color: white; font-weight: 600; font-size: 24px; text-decoration: none; text-transform: uppercase; }
         .logo span { color: var(--accent); }
         .search-input { background: #0b0c10; border: 1px solid var(--border); padding: 8px 15px; border-radius: 20px; color: white; outline: none; width: 250px; }
+        
         .wrapper { max-width: 1100px; margin: auto; padding: 40px; display: grid; grid-template-columns: {% if session.get('logged_in') %}3fr 1.2fr{% else %}1fr{% endif %}; gap: 30px; }
         
-        .profile-card { background: linear-gradient(145deg, #1a1d29, #14171f); border: 2px solid var(--accent); border-radius: 20px; padding: 25px; margin-bottom: 30px; display: flex; align-items: center; gap: 25px; }
-        .big-head { width: 80px; height: 80px; border-radius: 12px; }
+        /* Profile Card Styling */
+        .profile-card { background: linear-gradient(145deg, #1a1d29, #14171f); border: 2px solid var(--accent); border-radius: 20px; padding: 30px; margin-bottom: 40px; display: flex; align-items: flex-start; gap: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .big-head { width: 100px; height: 100px; border-radius: 15px; border: 3px solid #2d313d; }
+        .namemc-btn { display: inline-block; background: #fff; color: #000; padding: 6px 15px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 12px; margin-top: 10px; transition: 0.2s; }
+        .namemc-btn:hover { background: var(--accent); color: white; }
+        
+        .tier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin-top: 15px; width: 100%; }
+        .tier-item { background: rgba(0,0,0,0.3); padding: 8px; border-radius: 10px; border: 1px solid var(--border); font-size: 13px; text-align: center; }
+        .tier-item b { display: block; color: var(--accent); font-size: 15px; }
+        .retired-tag { color: var(--dim) !important; font-style: italic; }
 
-        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 12px 20px; margin-bottom: 10px; display: grid; grid-template-columns: 50px 50px 220px 80px 1fr; align-items: center; }
+        /* Leaderboard Styling */
+        .player-row { 
+            background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 12px 20px; margin-bottom: 10px; 
+            display: grid; grid-template-columns: 50px 50px 220px 80px 1fr; align-items: center; 
+            cursor: pointer; transition: 0.2s; text-decoration: none; color: inherit;
+        }
+        .player-row:hover { border-color: var(--accent); transform: translateY(-2px); background: #1c1f2b; }
         .avatar { width: 40px; height: 40px; border-radius: 8px; }
         .na { color: #e74c3c; border: 1px solid #e74c3c; padding: 2px 5px; border-radius: 4px; font-size: 10px; font-weight: 800;}
         .eu { color: #2ecc71; border: 1px solid #2ecc71; padding: 2px 5px; border-radius: 4px; font-size: 10px; font-weight: 800;}
         .tier-badge { background: #1c1f26; padding: 6px 12px; border-radius: 8px; border: 1px solid #2d313d; text-align: center; font-weight: 600; }
-        .admin-panel { background: #1c1f2b; border: 1px solid #ff4b2b; padding: 20px; border-radius: 18px; }
+        
+        .admin-panel { background: #1c1f2b; border: 1px solid #ff4b2b; padding: 20px; border-radius: 18px; position: sticky; top: 100px; }
         input, select { width: 100%; background: #0b0c10; color: white; border: 1px solid #333; padding: 10px; border-radius: 8px; margin-bottom: 10px; box-sizing: border-box;}
         .btn { background: red; color: white; border: none; padding: 10px; width: 100%; border-radius: 8px; cursor: pointer; font-weight: 800;}
     </style>
@@ -88,13 +104,18 @@ HTML_TEMPLATE = """
         <div class="main">
             {% if spotlight %}
             <div class="profile-card">
-                <img src="https://minotar.net/helm/{{spotlight.username}}/80.png" class="big-head">
-                <div>
-                    <h1 style="margin:0;">{{ spotlight.username }}</h1>
-                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+                <div style="text-align: center;">
+                    <img src="https://minotar.net/helm/{{spotlight.username}}/100.png" class="big-head">
+                    <a href="https://namemc.com/profile/{{spotlight.username}}" target="_blank" class="namemc-btn">NameMC</a>
+                </div>
+                <div style="flex-grow: 1;">
+                    <h1 style="margin:0; font-size: 32px;">{{ spotlight.username }}</h1>
+                    <p style="color:var(--dim); margin: 5px 0 15px 0;">Global Region: <span class="{{spotlight.region.lower()}}">{{spotlight.region}}</span></p>
+                    <div class="tier-grid">
                         {% for m, t in spotlight.ranks.items() %}
-                        <div style="background:#0b0c10; padding:5px 12px; border-radius:8px; font-size:12px; border:1px solid var(--border)">
-                            {{m}}: <b style="color:{% if t=='RETIRED' %}var(--dim){% else %}var(--accent){% endif %}">{{t}}</b>
+                        <div class="tier-item">
+                            {{m}}
+                            <b class="{% if t=='RETIRED' %}retired-tag{% endif %}">{{t}}</b>
                         </div>
                         {% endfor %}
                     </div>
@@ -102,25 +123,25 @@ HTML_TEMPLATE = """
             </div>
             {% endif %}
 
-            <h2>🏆 LEADERBOARD</h2>
+            <h2>🏆 RANKINGS</h2>
             {% for p in players if p.is_active %}
-            <div class="player-row">
+            <a href="/?search={{p.username}}" class="player-row">
                 <div style="font-weight:800; color:var(--accent)">#{{ loop.index }}</div>
                 <img src="https://minotar.net/helm/{{p.username}}/40.png" class="avatar">
-                <div><b>{{ p.username }}</b><br><small style="color:var(--dim)">{{ p.total_points }} Pts</small></div>
+                <div><b>{{ p.username }}</b><br><small style="color:var(--dim)">{{ p.total_points }} Points</small></div>
                 <div><span class="{{ p.region.lower() }}">{{ p.region }}</span></div>
                 <div class="tier-badge">
                     {% if loop.index <= 3 %}<span style="color:#ffb800">ELITE</span>
                     {% elif loop.index <= 10 %}<span style="color:#fff">PRO</span>
                     {% else %}<span style="color:var(--dim)">BEGINNER</span>{% endif %}
                 </div>
-            </div>
+            </a>
             {% endfor %}
         </div>
 
         {% if session.get('logged_in') %}
         <div class="side"><div class="admin-panel">
-            <small style="color:#ff4b2b; font-weight:800;">ADMIN</small>
+            <small style="color:#ff4b2b; font-weight:800;">ADMIN PANEL</small>
             <form action="/update" method="POST">
                 <input type="text" name="username" placeholder="Player Name" required>
                 <select name="region"><option>NA</option><option>EU</option></select>
@@ -151,7 +172,12 @@ def index():
     spotlight = None
     if search_q:
         user_ranks = [p for p in players_data if p['username'].lower() == search_q]
-        if user_ranks: spotlight = {"username": user_ranks[0]['username'], "ranks": {p['gamemode']: p['tier'] for p in user_ranks}}
+        if user_ranks:
+            spotlight = {
+                "username": user_ranks[0]['username'], 
+                "region": user_ranks[0].get('region', 'NA'),
+                "ranks": {p['gamemode']: p['tier'] for p in user_ranks}
+            }
 
     processed = sorted([
         {"username": u, "total_points": d['pts'], "region": d['region'], "is_active": d['is_active']} 
