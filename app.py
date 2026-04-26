@@ -54,7 +54,7 @@ async def retire(interaction: discord.Interaction, name: str, mode: app_commands
 
 # --- WEB UI ---
 app = Flask(__name__)
-app.secret_key = "birdtiers_legacy_final"
+app.secret_key = "birdtiers_strikethrough_final"
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -88,14 +88,16 @@ HTML_TEMPLATE = """
             text-align: center;
         }
 
-        /* --- THE SPECIFIC REQUESTED STYLE --- */
+        /* --- THE REQUESTED STYLE: BOLD, STRIPED, TILTED --- */
         .legacy-tier {
             display: inline-block;
-            color: var(--dim) !important;
-            font-style: italic; /* Italicized */
-            transform: skewX(-10deg); /* The "tilted" look for text */
-            font-weight: 400;
-            opacity: 0.7;
+            color: #666 !important; /* Dimmed Gray */
+            font-weight: 800; /* Bold */
+            font-style: italic; /* Italic */
+            text-decoration: line-through; /* Strikethrough */
+            text-decoration-thickness: 2px;
+            transform: skewX(-15deg); /* Tilted Look */
+            opacity: 0.6;
         }
 
         .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 20px; margin-bottom: 8px; display: grid; grid-template-columns: 40px 45px 1fr 70px 110px; align-items: center; text-decoration: none; color: inherit; transition: 0.15s; }
@@ -131,7 +133,7 @@ HTML_TEMPLATE = """
                     {% for r in spotlight.ranks %}
                     <div class="tier-box">
                         <span style="color:var(--dim); font-size:10px;">{{r.gamemode}}</span><br>
-                        <b class="{% if r.retired %}legacy-tier{% endif %}" style="color:var(--accent); font-size:15px;">{{r.tier}}</b>
+                        <b class="{% if r.retired %}legacy-tier{% endif %}" style="color:var(--accent); font-size:16px;">{{r.tier}}</b>
                     </div>
                     {% endfor %}
                 </div>
