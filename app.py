@@ -8,7 +8,7 @@ import threading
 # --- CONFIGURATION ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
-MAINTENANCE_MODE = True # 🟢 SET TO False TO GO PUBLIC
+MAINTENANCE_MODE = False # 🟢 SET TO False TO GO PUBLIC
 
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)
 db_mongo = client['birdtiers_db']
