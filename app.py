@@ -10,7 +10,8 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 MAINTENANCE_MODE = os.getenv("MAINTENANCE_MODE", "False").lower() == "true"
 
-client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+# Setup Mongo with retry writes enabled
+client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, retryWrites=True)
 db_mongo = client['birdtiers_db']
 players_col = db_mongo['players']
 
@@ -34,25 +35,27 @@ async def rank(interaction: discord.Interaction, name: str, mode: app_commands.C
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
     
-    # BLOCK manual "retired" entry in the rank command
-    if tier.upper() == "RETIRED":
-        return await interaction.response.send_message("❌ Use `/retire` to retire a player. This command is for active tiers only.", ephemeral=True)
+    tier_up = tier.upper().strip()
+    if tier_up == "RETIRED":
+        return await interaction.response.send_message("❌ Use `/retire` instead.", ephemeral=True)
 
-    tier_up = tier.upper()
     name_clean = name.strip()
     
-    players_col.update_one(
-        {"username": {"$regex": f"^{name_clean}$", "$options": "i"}, "gamemode": mode.value},
-        {"$set": {
+    # Using filter with $options: 'i' for case-insensitive match on the username
+    filter_query = {"username": {"$regex": f"^{name_clean}$", "$options": "i"}, "gamemode": mode.value}
+    
+    update_data = {
+        "$set": {
             "username": name_clean, 
             "gamemode": mode.value, 
             "tier": tier_up, 
             "region": region.upper().strip(), 
-            "retired": False  # Re-activates them if they were retired
-        }},
-        upsert=True
-    )
-    await interaction.response.send_message(f"✅ Updated {name_clean} to **{tier_up}** in {mode.value}.", ephemeral=True)
+            "retired": False 
+        }
+    }
+    
+    players_col.update_one(filter_query, update_data, upsert=True)
+    await interaction.response.send_message(f"✅ Set **{name_clean}** to **{tier_up}** ({mode.value})", ephemeral=True)
 
 @bot.tree.command(name="retire", description="Retire player from mode or globally")
 @app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES] + [app_commands.Choice(name="Global", value="all")])
@@ -61,22 +64,24 @@ async def retire(interaction: discord.Interaction, name: str, mode: app_commands
         return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
     
     name_clean = name.strip()
+    # Broad query: find any entry for this user
     query = {"username": {"$regex": f"^{name_clean}$", "$options": "i"}}
     
     if mode.value != "all": 
         query["gamemode"] = mode.value
     
-    # Check if player even exists before retiring
-    exists = players_col.find_one(query)
-    if not exists:
-        return await interaction.response.send_message(f"❌ Could not find {name_clean} in the database.", ephemeral=True)
+    # Check if they exist at all in any mode
+    total_found = players_col.count_documents(query)
+    
+    if total_found == 0:
+        return await interaction.response.send_message(f"❌ User '{name_clean}' not found in database for mode: {mode.value}.", ephemeral=True)
 
     players_col.update_many(query, {"$set": {"retired": True}})
-    await interaction.response.send_message(f"💀 **{name_clean}** is now retired ({mode.value}). Tier preserved but grayed out.", ephemeral=True)
+    await interaction.response.send_message(f"💀 Retired **{name_clean}** in {total_found} entry/ies ({mode.value}).", ephemeral=True)
 
 # --- WEB UI ---
 app = Flask(__name__)
-app.secret_key = "birdtiers_integrity_v9"
+app.secret_key = "birdtiers_robust_v10"
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -97,22 +102,9 @@ HTML_TEMPLATE = """
         .wrapper { max-width: 900px; margin: auto; padding: 25px; }
         .profile-card { background: linear-gradient(145deg, #1a1d29, #14171f); border: 2px solid var(--accent); border-radius: 18px; padding: 25px; margin-bottom: 30px; display: flex; gap: 25px; align-items: center; }
         .tier-box { background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; font-size: 11px; border: 1px solid var(--border); text-align: center; }
-        
-        /* BOLD STRIPED TILTED TEXT */
-        .legacy-tier { 
-            display: inline-block; 
-            color: #666 !important; 
-            font-weight: 800; 
-            font-style: italic; 
-            text-decoration: line-through; 
-            text-decoration-thickness: 2px;
-            transform: skewX(-15deg); 
-            opacity: 0.6; 
-        }
-
-        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 20px; margin-bottom: 8px; display: grid; grid-template-columns: 40px 45px 1fr 70px 110px; align-items: center; text-decoration: none; color: inherit; transition: 0.15s; }
-        .player-row:hover { border-color: var(--accent); transform: translateX(5px); }
-        .retired-row { opacity: 0.4; filter: grayscale(1); }
+        .legacy-tier { display: inline-block; color: #666 !important; font-weight: 800; font-style: italic; text-decoration: line-through; text-decoration-thickness: 2px; transform: skewX(-15deg); opacity: 0.6; }
+        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 20px; margin-bottom: 8px; display: grid; grid-template-columns: 40px 45px 1fr 70px 110px; align-items: center; text-decoration: none; color: inherit; }
+        .retired-row { opacity: 0.5; filter: grayscale(1); }
         .tier-badge { background: #1c1f26; padding: 5px 10px; border-radius: 6px; border: 1px solid #2d313d; text-align: center; font-weight: 800; font-size: 12px; }
         .na { color: #e74c3c; } .eu { color: #2ecc71; }
     </style>
@@ -152,7 +144,7 @@ HTML_TEMPLATE = """
         </div>
         {% endif %}
         {% for p in players %}
-        <a href="/?search={{p.username}}{% if current_mode %}&mode={{current_mode}}{% endif %}" class="player-row {% if p.retired %}retired-row{% endif %}">
+        <a href="/?search={{p.username}}" class="player-row {% if p.retired %}retired-row{% endif %}">
             <div style="font-weight:800; color:var(--accent)">#{{ loop.index }}</div>
             <img src="https://minotar.net/helm/{{p.username}}/35.png" style="border-radius:5px;">
             <div><b>{{ p.username }}</b><br><small style="color:var(--dim)">{{ p.points }} Pts</small></div>
@@ -181,10 +173,8 @@ def index():
         
         if mode_filter:
             if gm.lower() == mode_filter.lower():
-                # Specific mode leaderboard
                 stats[u] = {"points": TIER_DATA.get(tier, 0), "region": p.get('region', 'NA'), "retired": is_retired, "tier": tier}
         else:
-            # Global point calculation
             if u not in stats: stats[u] = {"points": 0, "region": p.get('region', 'NA'), "retired": True}
             p_val = TIER_DATA.get(tier, 0)
             if not is_retired:
