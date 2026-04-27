@@ -9,6 +9,7 @@ import threading
 TOKEN = os.getenv("DISCORD_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
+DISCORD_INVITE = os.getenv("DISCORD_INVITE", "https://discord.gg/2aBZzT6yyq") # Add your invite link here
 MAINTENANCE_MODE = os.getenv("MAINTENANCE_MODE", "False").lower() == "true"
 
 # MongoDB Setup
@@ -68,7 +69,6 @@ async def rank(interaction: discord.Interaction, name: str, mode: app_commands.C
 
     await interaction.response.send_message(f"✅ Logged update for {name_clean}.", ephemeral=True)
 
-    # Announcement Embed
     embed = discord.Embed(title="📈 Tier Update", color=0x5e6ad2)
     embed.add_field(name="Player", value=name_clean, inline=True)
     embed.add_field(name="Gamemode", value=mode.value, inline=True)
@@ -94,7 +94,6 @@ async def retire(interaction: discord.Interaction, name: str, mode: app_commands
     players_col.update_many(query, {"$set": {"retired": True}})
     await interaction.response.send_message(f"💀 Retired {name_clean} in {found_count} modes.", ephemeral=True)
 
-    # Announcement Embed
     embed = discord.Embed(title="💀 Player Retired", color=0x666666)
     embed.description = f"**{name_clean}** is now retired from **{mode.value}**."
     embed.set_thumbnail(url=f"https://minotar.net/helm/{name_clean}/100.png")
@@ -102,7 +101,7 @@ async def retire(interaction: discord.Interaction, name: str, mode: app_commands
 
 # --- WEB UI ---
 app = Flask(__name__)
-app.secret_key = "birdtiers_final_stable_v12"
+app.secret_key = "birdtiers_discord_v13"
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -111,25 +110,39 @@ HTML_TEMPLATE = """
     <title>BIRDTIERS</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600&display=swap');
-        :root { --bg: #0b0c10; --card: #14171f; --border: #262932; --accent: #5e6ad2; --text: #e0e6ed; --dim: #8b949e; }
+        :root { --bg: #0b0c10; --card: #14171f; --border: #262932; --accent: #5e6ad2; --text: #e0e6ed; --dim: #8b949e; --discord: #5865F2; }
         body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
         
         .navbar { background: #0f1117; padding: 15px 50px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position: sticky; top:0; z-index: 100;}
         .logo { color: white; font-weight: 600; font-size: 24px; text-decoration: none; text-transform: uppercase; }
         .logo span { color: var(--accent); }
+        
+        .nav-right { display: flex; gap: 15px; align-items: center; }
         .search-input { background: #0b0c10; border: 1px solid var(--border); padding: 8px 18px; border-radius: 20px; color: white; outline: none; width: 180px; }
         
+        .discord-btn { 
+            background: var(--discord); 
+            color: white; 
+            text-decoration: none; 
+            padding: 8px 16px; 
+            border-radius: 20px; 
+            font-size: 13px; 
+            font-weight: 600; 
+            transition: 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .discord-btn:hover { background: #4752c4; transform: translateY(-2px); }
+
         .mode-nav { display: flex; gap: 8px; flex-wrap: wrap; padding: 15px 50px; background: #0f1117; border-bottom: 1px solid var(--border); justify-content: center; }
         .mode-btn { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 12px; font-weight: 600; }
         .mode-btn:hover, .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
 
         .wrapper { max-width: 900px; margin: auto; padding: 25px; }
-
-        /* PROFILE STYLES */
         .profile-card { background: linear-gradient(145deg, #1a1d29, #14171f); border: 2px solid var(--accent); border-radius: 18px; padding: 25px; margin-bottom: 30px; display: flex; gap: 25px; align-items: center; }
         .tier-box { background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; font-size: 11px; border: 1px solid var(--border); text-align: center; }
         
-        /* BOLD STRIPED TILTED LEGACY TEXT */
         .legacy-tier { 
             display: inline-block; 
             color: #666 !important; 
@@ -141,7 +154,6 @@ HTML_TEMPLATE = """
             opacity: 0.6; 
         }
 
-        /* LEADERBOARD LIST */
         .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 20px; margin-bottom: 8px; display: grid; grid-template-columns: 40px 45px 1fr 70px 110px; align-items: center; text-decoration: none; color: inherit; transition: 0.1s; }
         .player-row:hover { border-color: var(--accent); transform: translateX(5px); }
         .retired-row { opacity: 0.5; filter: grayscale(1); }
@@ -152,7 +164,15 @@ HTML_TEMPLATE = """
 <body>
     <div class="navbar">
         <a href="/" class="logo">BIRD<span>TIERS</span></a>
-        <form><input type="text" name="search" class="search-input" placeholder="Search..." value="{{ search_query }}"></form>
+        <div class="nav-right">
+            <form><input type="text" name="search" class="search-input" placeholder="Search..." value="{{ search_query }}"></form>
+            <a href="{{ discord_link }}" target="_blank" class="discord-btn">
+                <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                    <path d="M13.545 2.907a13.227 13.227 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.19 12.19 0 0 0-3.658 0 8.258 8.258 0 0 0-.412-.833.051.051 0 0 0-.052-.025 13.235 13.235 0 0 0-3.257 1.011.041.041 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032c.001.014.01.028.021.037a13.276 13.276 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019c.308-.42.582-.863.818-1.329a.05.05 0 0 0-.01-.059.051.051 0 0 0-.018-.011 8.875 8.875 0 0 1-1.248-.595.05.05 0 0 1-.02-.066.051.051 0 0 1 .015-.019c.084-.063.168-.129.248-.195a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.052.052 0 0 1 .053.007c.08.066.164.132.248.195a.051.051 0 0 1-.004.085 8.254 8.254 0 0 1-1.248.595.05.05 0 0 0-.023.07c.236.466.51.909.818 1.329a.05.05 0 0 0 .056.019 13.235 13.235 0 0 0 4.001-2.02.049.049 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.106a.034.034 0 0 0-.02-.019Zm-8.198 7.307c-.789 0-1.438-.724-1.438-1.612 0-.889.637-1.613 1.438-1.613.807 0 1.45.73 1.438 1.613 0 .888-.637 1.612-1.438 1.612Zm5.316 0c-.788 0-1.438-.724-1.438-1.612 0-.889.637-1.613 1.438-1.613.807 0 1.451.73 1.438 1.613 0 .888-.631 1.612-1.438 1.612Z"/>
+                </svg>
+                Discord
+            </a>
+        </div>
     </div>
     
     {% if maint and not session.get('admin') %}
@@ -239,7 +259,7 @@ def index():
         if user_ranks:
             spotlight = {"username": user_ranks[0]['username'], "ranks": user_ranks}
 
-    return render_template_string(HTML_TEMPLATE, players=processed, all_modes=MODES, current_mode=mode_filter, maint=MAINTENANCE_MODE, spotlight=spotlight, search_query=search_q)
+    return render_template_string(HTML_TEMPLATE, players=processed, all_modes=MODES, current_mode=mode_filter, maint=MAINTENANCE_MODE, spotlight=spotlight, search_query=search_q, discord_link=DISCORD_INVITE)
 
 @app.route('/login')
 def login():
