@@ -228,6 +228,23 @@ def index():
 @app.route('/login')
 def login(): session['admin'] = True; return redirect('/')
 
+# --- THE GUNICORN-FRIENDLY RUNNER ---
+
+def run_bot():
+    """Function to run the bot in a background thread."""
+    if TOKEN:
+        print("🌋 Starting MAGMATiers Bot from background thread...")
+        try:
+            bot.run(TOKEN)
+        except Exception as e:
+            print(f"❌ Bot Error: {e}")
+
+# Start the bot thread immediately (Gunicorn will pick this up)
+bot_thread = threading.Thread(target=run_bot, daemon=True)
+bot_thread.start()
+
+# Flask needs to stay accessible for Gunicorn
 if __name__ == '__main__':
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000))), daemon=True).start()
-    bot.run(TOKEN)
+    # This part only runs if you run 'python app.py' locally
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
