@@ -103,45 +103,70 @@ HTML_TEMPLATE = """
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600&display=swap');
         :root { 
-            --bg: #0b0c10; 
-            --card: #14171f; 
-            --border: #262932; 
-            --accent: #ff4500; /* MAGMA ORANGE-RED */
-            --text: #e0e6ed; 
-            --dim: #8b949e; 
-            --discord: #5865F2; 
+            --bg: #0b0c10; --card: #14171f; --border: #262932; 
+            --accent: #ff4500; --text: #e0e6ed; --dim: #8b949e; --discord: #5865F2; 
         }
         body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
         
+        /* NAVBAR & NAV (Same as before) */
         .navbar { background: #0f1117; padding: 15px 50px; border-bottom: 2px solid var(--accent); display: flex; justify-content: space-between; align-items: center; position: sticky; top:0; z-index: 100;}
-        .logo { color: white; font-weight: 800; font-size: 26px; text-decoration: none; text-transform: uppercase; letter-spacing: 1px; }
+        .logo { color: white; font-weight: 800; font-size: 26px; text-decoration: none; text-transform: uppercase; }
         .logo span { color: var(--accent); }
-        
         .nav-right { display: flex; gap: 15px; align-items: center; }
         .search-input { background: #0b0c10; border: 1px solid var(--border); padding: 8px 18px; border-radius: 20px; color: white; outline: none; width: 180px; }
-        .discord-btn { background: var(--discord); color: white; text-decoration: none; padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; transition: 0.2s; display: flex; align-items: center; gap: 8px; }
-        .discord-btn:hover { background: #4752c4; transform: translateY(-2px); }
-
+        .discord-btn { background: var(--discord); color: white; text-decoration: none; padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; }
         .mode-nav { display: flex; gap: 8px; flex-wrap: wrap; padding: 15px 50px; background: #0f1117; border-bottom: 1px solid var(--border); justify-content: center; }
-        .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 12px; font-weight: 600; transition: 0.2s; }
-        .mode-btn:hover, .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; box-shadow: 0 0 10px rgba(255, 69, 0, 0.2); }
+        .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 12px; font-weight: 600; }
+        .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; box-shadow: 0 0 10px rgba(255, 69, 0, 0.2); }
 
         .wrapper { max-width: 950px; margin: auto; padding: 25px; }
-        
-        /* SPOTLIGHT */
-        .profile-card { background: linear-gradient(145deg, #1f1412, #14171f); border: 2px solid var(--accent); border-radius: 18px; padding: 25px; margin-bottom: 30px; display: flex; gap: 25px; align-items: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .tier-box { background: rgba(0,0,0,0.4); padding: 12px; border-radius: 8px; font-size: 11px; border: 1px solid var(--border); text-align: center; }
-        .legacy-tier { display: inline-block; color: #666 !important; font-weight: 800; font-style: italic; text-decoration: line-through; text-decoration-thickness: 2px; transform: skewX(-15deg); opacity: 0.6; }
 
-        /* LIST */
+        /* --- INSANE ANIMATIONS FOR HT1 / LT1 --- */
+        @keyframes magmaFlow {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        @keyframes tierGlow {
+            0% { box-shadow: 0 0 5px #ff4500; }
+            50% { box-shadow: 0 0 20px #ff8c00, 0 0 30px #ff4500; }
+            100% { box-shadow: 0 0 5px #ff4500; }
+        }
+
+        @keyframes textShimmer {
+            from { filter: hue-rotate(0deg); }
+            to { filter: hue-rotate(360deg); }
+        }
+
+        .insane-row {
+            background: linear-gradient(-45deg, #14171f, #2b110a, #4a0e00, #14171f) !important;
+            background-size: 400% 400% !important;
+            animation: magmaFlow 6s ease infinite !important;
+            border: 1px solid #ff4500 !important;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .insane-tier {
+            background: #ff4500 !important;
+            color: white !important;
+            animation: tierGlow 2s infinite !important;
+            text-shadow: 0 0 8px rgba(255,255,255,0.8);
+            border: none !important;
+        }
+
+        .insane-name {
+            color: #fff;
+            text-shadow: 0 0 10px #ff4500;
+            animation: textShimmer 4s linear infinite;
+        }
+
+        /* DEFAULT ROW STYLES */
         .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 25px; margin-bottom: 10px; display: grid; grid-template-columns: 45px 50px 1fr 70px 120px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
-        .player-row:hover { border-color: var(--accent); background: #1c1f2b; transform: scale(1.01); }
-        .retired-row { opacity: 0.5; filter: grayscale(1); }
-        
+        .player-row:hover { border-color: var(--accent); transform: scale(1.01); }
         .tier-badge { background: #1c1f26; padding: 6px 12px; border-radius: 6px; border: 1px solid #2d313d; text-align: center; font-weight: 800; font-size: 13px; color: var(--accent); }
-        
-        /* REGIONS */
-        .na { color: #ff6b6b; } .eu { color: #51cf66; } .asia { color: #fcc419; } .oc { color: #339af0; } .af { color: #f76707; } .sa { color: #ae3ec9; }
+        .na { color: #ff6b6b; } .eu { color: #51cf66; } .asia { color: #fcc419; } .oc { color: #3498db; } .af { color: #f76707; } .sa { color: #ae3ec9; }
     </style>
 </head>
 <body>
@@ -153,9 +178,6 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    {% if maint and not session.get('admin') %}
-    <div class="wrapper" style="text-align:center; margin-top:100px;"><h1>🔥 Cooling Down... (Maintenance)</h1></div>
-    {% else %}
     <div class="mode-nav">
         <a href="/" class="mode-btn {% if not current_mode %}active{% endif %}">GLOBAL</a>
         {% for m in all_modes %}
@@ -164,41 +186,25 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="wrapper">
-        {% if spotlight %}
-        <div class="profile-card">
-            <div style="text-align:center">
-                <img src="https://minotar.net/helm/{{spotlight.username}}/80.png" style="border-radius:12px;">
-                <a href="https://namemc.com/profile/{{spotlight.username}}" target="_blank" style="font-size:10px; color:var(--dim); text-decoration:none; display:block; margin-top:8px;">View NameMC</a>
-            </div>
-            <div style="flex-grow:1;">
-                <h1 style="margin:0; font-size:32px;">{{ spotlight.username }}</h1>
-                <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap:12px; margin-top:15px;">
-                    {% for r in spotlight.ranks %}
-                    <div class="tier-box">
-                        <span style="color:var(--dim); font-size:10px;">{{r.gamemode}}</span><br>
-                        <b class="{% if r.retired %}legacy-tier{% endif %}" style="color:var(--accent); font-size:16px;">{{r.tier}}</b>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-        {% endif %}
-
         {% for p in players %}
-        <a href="/?search={{p.username}}{% if current_mode %}&mode={{current_mode}}{% endif %}" class="player-row {% if p.retired %}retired-row{% endif %}">
+        {% set is_insane = p.tier in ['HT1', 'LT1'] %}
+        <a href="/?search={{p.username}}" class="player-row {% if is_insane %}insane-row{% endif %}">
             <div style="font-weight:800; color:var(--accent)">#{{ loop.index }}</div>
             <img src="https://minotar.net/helm/{{p.username}}/35.png" style="border-radius:6px;">
-            <div><b>{{ p.username }}</b><br><small style="color:var(--dim)">{{ p.points }} Pts</small></div>
+            <div>
+                <b class="{% if is_insane %}insane-name{% endif %}">{{ p.username }}</b>
+                <br><small style="color:var(--dim)">{{ p.points }} Pts</small>
+            </div>
             <div class="{{ p.region.lower() }}" style="font-weight:800; font-size:13px;">{{ p.region }}</div>
-            <div class="tier-badge">{% if p.retired %}RETIRED{% else %}{{ p.tier }}{% endif %}</div>
+            <div class="tier-badge {% if is_insane %}insane-tier{% endif %}">
+                {{ p.tier }}
+            </div>
         </a>
         {% endfor %}
     </div>
-    {% endif %}
 </body>
 </html>
 """
-
 @app.route('/')
 def index():
     mode_filter, search_q = request.args.get('mode', ''), request.args.get('search', '').strip().lower()
