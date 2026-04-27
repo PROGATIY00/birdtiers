@@ -11,7 +11,7 @@ import time
 TOKEN = os.getenv("DISCORD_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
-DISCORD_INVITE = os.getenv("DISCORD_INVITE", "https://discord.gg/yourlink")
+DISCORD_INVITE = os.getenv("DISCORD_INVITE", "https://discord.gg/2aBZzT6yyq")
 MAINTENANCE_MODE = os.getenv("MAINTENANCE_MODE", "False").lower() == "true"
 
 # MongoDB Setup
