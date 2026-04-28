@@ -11,7 +11,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")      # Public Feed
 STATUS_CHANNEL_ID = os.getenv("STATUS_CHANNEL_ID") # Network Updates
-DISCORD_INVITE = os.getenv("DISCORD_INVITE", "https://discord.gg/magmatiers")
+DISCORD_INVITE = os.getenv("DISCORD_INVITE", "https://dsc.gg/magmatiers")
 
 # --- DATA MAPS ---
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
