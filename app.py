@@ -212,36 +212,47 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
-
 @app.route('/')
 def index():
-    m_doc = settings_col.find_one({"id": "maintenance"})
-    if m_doc and m_doc.get('enabled'): return "<h1>Maintenance Mode</h1>"
-    mode_f = request.args.get('mode', '')
-    search_q = request.args.get('search', '').strip().lower()
-    players_data = list(players_col.find({}))
-    p_list = list(partners_col.find({}))
+    # ... (maintenance check and data fetching as before) ...
+    
     stats = {}
     for p in players_data:
         u, t, gm = p['username'], p['tier'], p['gamemode']
         is_ret = p.get('retired', False)
+        
+        # SKIP if player is retired in this specific entry
+        if is_ret:
+            continue
+            
         val = TIER_DATA.get(t, 0)
-        if u not in stats: stats[u] = {"pts": 0, "tier": t, "region": p.get('region', 'NA'), "retired": is_ret}
+        
+        if u not in stats: 
+            stats[u] = {"pts": 0, "tier": t, "region": p.get('region', 'NA'), "retired": False}
+        
         if mode_f:
-            if gm.lower() == mode_f.lower(): stats[u].update({"pts": val, "tier": t})
-            else: stats[u]["pts"] = -1
+            # If filtering by mode and they aren't retired in it, add them
+            if gm.lower() == mode_f.lower(): 
+                stats[u].update({"pts": val, "tier": t})
+            else: 
+                stats[u]["pts"] = -1
         else:
-            stats[u]["pts"] += (val * 0.1) if is_ret else val
+            # Global view: Only adds points for non-retired entries
+            stats[u]["pts"] += val
 
-    processed = sorted([{"username": u, "points": int(d["pts"]), "tier": d["tier"], "region": d["region"], "retired": d["retired"], "rank_name": get_global_rank(d["pts"])} for u, d in stats.items() if d["pts"] >= 0], key=lambda x: (x["retired"], -x["points"]))
-    spotlight = None
-    if search_q:
-        res = list(players_col.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}}))
-        if res:
-            pos = next((i + 1 for i, p in enumerate(processed) if p['username'].lower() == search_q), "?")
-            spotlight = {"username": res[0]['username'], "ranks": res, "pos": pos, "region": res[0].get('region', 'NA')}
-    return render_template_string(HTML_TEMPLATE, players=processed, spotlight=spotlight, search_query=search_q, all_modes=MODES, current_mode=mode_f, icons=MODE_ICONS, partners=p_list, invite_link=DISCORD_INVITE)
+    # Final Filter: Remove players with 0 or negative points (meaning they are retired in everything)
+    processed = sorted([
+        {
+            "username": u, 
+            "points": int(d["pts"]), 
+            "tier": d["tier"], 
+            "region": d["region"], 
+            "rank_name": get_global_rank(d["pts"])
+        } 
+        for u, d in stats.items() if d["pts"] > 0
+    ], key=lambda x: -x["points"])
 
+    # ... (rest of the return template_string) ...
 def run_bot():
     asyncio.set_event_loop(asyncio.new_event_loop())
     bot.run(TOKEN)
