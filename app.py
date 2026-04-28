@@ -13,6 +13,17 @@ LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")      # Public Tier Change Feed
 STATUS_CHANNEL_ID = os.getenv("STATUS_CHANNEL_ID") # Network Status Feed
 DISCORD_INVITE = os.getenv("DISCORD_INVITE", "https://dsc.gg/magmatiers")
 
+# --- GAMEMODE ICONS ---
+# Add your PNG URLs here. If a mode isn't here, it shows the text name.
+MODE_ICONS = {
+    "Crystal": "https://i.imgur.com/8QO5W5M.png",
+    "UHC": "https://i.imgur.com/K4zI904.png",
+    "Pot": "https://i.imgur.com/example_pot.png",
+    "Sword": "https://i.imgur.com/example_sword.png",
+    "Axe": "https://i.imgur.com/example_axe.png",
+    # Add others as needed...
+}
+
 # MongoDB
 client_db = MongoClient(MONGO_URI)
 db_mongo = client_db['magmatiers_db']
@@ -92,13 +103,11 @@ async def rank(interaction: discord.Interaction, name: str, mode: str, tier: str
         upsert=True
     )
 
-    # PUBLIC LIVE FEED MESSAGE
     if LOG_CHANNEL_ID:
         try:
             channel = await bot.fetch_channel(int(LOG_CHANNEL_ID))
             emoji = "🔼" if (old_tier != 'None' and TIER_ORDER.index(tier) > TIER_ORDER.index(old_tier)) else "🔽"
             if old_tier == 'None': emoji = "🆕"
-            
             await channel.send(f"{emoji} **{name_clean}** has been updated to **{tier}** in **{mode}** (Prev: {old_tier})")
         except Exception as e: print(f"Log Error: {e}")
 
@@ -121,19 +130,23 @@ HTML_TEMPLATE = """
         .logo span { color: var(--accent); }
         .search-input { background: #0b0c10; border: 1px solid var(--border); padding: 8px 18px; border-radius: 20px; color: white; outline: none; }
         
-        /* MODAL OVERLAY (From image_0.png) */
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:1001; display:flex; justify-content:center; align-items:center; }
         .profile-modal { background: #11141c; width: 420px; border-radius: 20px; border: 2px solid #2d3647; padding: 40px; position: relative; text-align: center; }
         .close-modal { position: absolute; top: 15px; right: 20px; font-size: 24px; color: #555; text-decoration: none; }
         .modal-avatar { width: 100px; height: 100px; border-radius: 50%; border: 3px solid #ffcc00; margin-bottom: 15px; }
-        .modal-tier-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; background: #080a0f; padding: 15px; border-radius: 12px; margin-top: 20px; }
-        .tier-badge { background: #1c1f26; padding: 6px; border-radius: 6px; color: var(--accent); font-weight: 800; position: relative; cursor: help; }
+        
+        .modal-tier-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; background: #080a0f; padding: 20px; border-radius: 12px; margin-top: 20px; }
+        .mode-item { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+        .mode-icon { height: 30px; width: 30px; object-fit: contain; filter: drop-shadow(0 0 5px rgba(255,69,0,0.3)); }
+        .mode-text { font-size: 10px; font-weight: 800; color: var(--dim); text-transform: uppercase; }
+        
+        .tier-badge { background: #1c1f26; padding: 4px 8px; border-radius: 6px; color: var(--accent); font-weight: 800; font-size: 12px; position: relative; cursor: help; width: 100%; box-sizing: border-box;}
         .peak-tooltip { visibility: hidden; background: #000; color: #fff; font-size: 10px; padding: 4px; position: absolute; bottom: 125%; left: 50%; transform: translateX(-50%); border-radius: 4px; border: 1px solid var(--accent); opacity: 0; transition: 0.2s; white-space: nowrap; }
         .tier-badge:hover .peak-tooltip { visibility: visible; opacity: 1; }
 
-        /* LIST STYLES */
         .wrapper { max-width: 900px; margin: auto; padding: 25px; }
-        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 25px; margin-bottom: 10px; display: grid; grid-template-columns: 40px 50px 1fr 100px; align-items: center; text-decoration: none; color: inherit; }
+        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 25px; margin-bottom: 10px; display: grid; grid-template-columns: 40px 50px 1fr 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
+        .player-row:hover { border-color: var(--accent); transform: scale(1.01); }
         .global-rank { font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; margin-left: 8px; border: 1px solid #ff4500; color: #ff4500; }
     </style>
 </head>
@@ -150,12 +163,24 @@ HTML_TEMPLATE = """
             <img src="https://minotar.net/helm/{{spotlight.username}}/100.png" class="modal-avatar">
             <h1 style="margin:0;">{{ spotlight.username }}</h1>
             <div style="color: #ffcc00; font-weight: 800; font-size: 14px; margin-top: 5px;">RANK #{{ spotlight.pos }} OVERALL</div>
+            
             <div class="modal-tier-grid">
                 {% for r in spotlight.ranks %}
-                <div class="tier-badge">{{ r.gamemode[:3]|upper }}<br>{{ r.tier }}<span class="peak-tooltip">Peak: {{r.peak}}</span></div>
+                <div class="mode-item">
+                    {% if r.gamemode in icons %}
+                        <img src="{{ icons[r.gamemode] }}" class="mode-icon" alt="{{ r.gamemode }}">
+                    {% else %}
+                        <span class="mode-text">{{ r.gamemode[:3] }}</span>
+                    {% endif %}
+                    <div class="tier-badge">
+                        {{ r.tier }}
+                        <span class="peak-tooltip">Peak: {{r.peak}}</span>
+                    </div>
+                </div>
                 {% endfor %}
             </div>
-            <a href="https://namemc.com/profile/{{spotlight.username}}" target="_blank" style="display:block; margin-top:20px; color:var(--dim); text-decoration:none; font-size:12px;">View NameMC</a>
+            
+            <a href="https://namemc.com/profile/{{spotlight.username}}" target="_blank" style="display:block; margin-top:20px; color:var(--dim); text-decoration:none; font-size:12px;">View NameMC Profile</a>
         </div>
     </div>
     {% endif %}
@@ -166,7 +191,7 @@ HTML_TEMPLATE = """
             <div style="font-weight:800; color:var(--accent)">#{{ loop.index }}</div>
             <img src="https://minotar.net/helm/{{p.username}}/35.png" style="border-radius:6px;">
             <div><b>{{ p.username }}</b> <span class="global-rank">{{ p.rank_name }}</span></div>
-            <div class="tier-badge">{{ p.tier }}<span class="peak-tooltip">Peak: {{p.peak}}</span></div>
+            <div class="tier-badge" style="text-align:center;">{{ p.tier }}<span class="peak-tooltip">Peak: {{p.peak}}</span></div>
         </a>
         {% endfor %}
     </div>
@@ -176,16 +201,15 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    if is_maint(): return "<h1>Maintenance Mode</h1>"
+    if is_maint(): return "<h1>Maintenance Active</h1>"
     search_q = request.args.get('search', '').strip().lower()
     players_data = list(players_col.find({}))
     
-    # Process Points
     stats = {}
     for p in players_data:
         u, tier = p['username'], p['tier']
         val = TIER_DATA.get(tier, 0)
-        if u not in stats: stats[u] = {"pts": 0, "tier": "N/A", "peak": p.get('peak', tier)}
+        if u not in stats: stats[u] = {"pts": 0, "tier": tier, "peak": p.get('peak', tier)}
         stats[u]["pts"] += val
 
     processed = sorted([{"username": u, "points": d["pts"], "tier": d["tier"], "peak": d["peak"], "rank_name": get_global_rank(d["pts"])[0]} for u, d in stats.items()], key=lambda x: -x["points"])
@@ -197,8 +221,8 @@ def index():
             pos = next((i + 1 for i, p in enumerate(processed) if p['username'].lower() == search_q), "?")
             spotlight = {"username": res[0]['username'], "ranks": res, "pos": pos}
 
-    return render_template_string(HTML_TEMPLATE, players=processed, spotlight=spotlight, search_query=search_q)
+    return render_template_string(HTML_TEMPLATE, players=processed, spotlight=spotlight, search_query=search_q, icons=MODE_ICONS)
 
 if __name__ == '__main__':
     threading.Thread(target=lambda: bot.run(TOKEN), daemon=True).start()
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
