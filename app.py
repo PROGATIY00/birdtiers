@@ -46,29 +46,83 @@ class MagmaBot(discord.Client):
         await self.tree.sync()
 
 bot = MagmaBot()
-
-@bot.tree.command(name="rank", description="Set a player's tier")
+@bot.tree.command(name="rank", description="Set a player's tier with detailed logging")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
 async def rank(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str]):
-    if not interaction.user.guild_permissions.administrator: return
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+
     tier = tier.upper().strip()
-    if tier not in TIER_ORDER: return await interaction.response.send_message("Invalid Tier", ephemeral=True)
+    if tier not in TIER_ORDER:
+        return await interaction.response.send_message(f"Invalid Tier. Use: {', '.join(TIER_ORDER)}", ephemeral=True)
+
+    # 1. Fetch current data to determine Promotion/Demotion
+    existing = players_col.find_one({"username": player, "gamemode": mode.value})
     
+    status_text = "Placed into"
+    color = discord.Color.blue()
+    old_tier = "None"
+
+    if existing:
+        old_tier = existing.get('tier', 'LT5')
+        if TIER_ORDER.index(tier) > TIER_ORDER.index(old_tier):
+            status_text = "Promoted to"
+            color = discord.Color.green()
+        elif TIER_ORDER.index(tier) < TIER_ORDER.index(old_tier):
+            status_text = "Demoted to"
+            color = discord.Color.red()
+        else:
+            status_text = "Updated in"
+            color = discord.Color.gold()
+
+    # 2. Update Database
+    peak = tier
+    if existing and TIER_ORDER.index(tier) < TIER_ORDER.index(existing.get('peak', 'LT5')):
+        peak = existing.get('peak', tier)
+
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
-        {"$set": {"username": player, "gamemode": mode.value, "tier": tier, "region": region.value, "peak": tier, "retired": False}},
+        {"$set": {
+            "username": player, 
+            "gamemode": mode.value, 
+            "tier": tier, 
+            "region": region.value, 
+            "peak": peak, 
+            "retired": False,
+            "last_updated": datetime.datetime.utcnow()
+        }},
         upsert=True
     )
+
+    # 3. Enhanced Logging
     if LOG_CHANNEL_ID:
         try:
-            ch = await bot.fetch_channel(int(LOG_CHANNEL_ID))
-            await ch.send(f"🌋 **{player}** updated to **{tier}** in **{mode.value}**")
-        except: pass
-    await interaction.response.send_message(f"✅ Updated {player}", ephemeral=True)
+            channel = await bot.fetch_channel(int(LOG_CHANNEL_ID))
+            embed = discord.Embed(
+                title="📈 Tier Update",
+                description=f"**{player}** has been **{status_text}** **{tier}**!",
+                color=color,
+                timestamp=datetime.datetime.utcnow()
+            )
+            embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
+            embed.add_field(name="🎮 Gamemode", value=mode.value, inline=True)
+            embed.add_field(name="🌍 Region", value=region.value, inline=True)
+            embed.add_field(name="📊 Previous Tier", value=old_tier, inline=True)
+            embed.add_field(name="🏔️ Peak Tier", value=peak, inline=True)
+            embed.set_footer(text="MagmaTIERS Official Feed", icon_url=bot.user.avatar.url if bot.user.avatar else None)
+            
+            # Button for the leaderboard
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(label="View Leaderboard", url=f"https://magmatiers.onrender.com/?search={player}"))
+            
+            await channel.send(embed=embed, view=view)
+        except Exception as e:
+            print(f"Detailed Log Error: {e}")
 
+    await interaction.response.send_message(f"✅ Successfully updated **{player}**.", ephemeral=True)
 # --- WEB ---
 app = Flask(__name__)
 
