@@ -86,12 +86,39 @@ async def rank(interaction: discord.Interaction, player: str, mode: app_commands
             await ch.send(embed=embed)
         except: pass
     await interaction.response.send_message(f"✅ Updated {player}", ephemeral=True)
+@bot.tree.command(name="retire", description="Retire a player from a specific gamemode or all")
+@app_commands.choices(
+    mode=[app_commands.Choice(name=m, value=m) for m in MODES] + [app_commands.Choice(name="All", value="all")]
+)
+async def retire(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str], status: bool):
+    if not interaction.user.guild_permissions.administrator: 
+        return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
 
-@bot.tree.command(name="retire", description="Retire a player (Legacy Points)")
-async def retire(interaction: discord.Interaction, player: str, status: bool):
-    if not interaction.user.guild_permissions.administrator: return
-    players_col.update_many({"username": {"$regex": f"^{player}$", "$options": "i"}}, {"$set": {"retired": status}})
-    await interaction.response.send_message(f"✅ {player} retirement set to {status}", ephemeral=True)
+    # Filtering logic
+    query = {"username": {"$regex": f"^{player}$", "$options": "i"}}
+    if mode.value != "all":
+        query["gamemode"] = mode.value
+
+    result = players_col.update_many(query, {"$set": {"retired": status}})
+
+    if result.matched_count > 0:
+        if LOG_CHANNEL_ID:
+            try:
+                ch = await bot.fetch_channel(int(LOG_CHANNEL_ID))
+                status_text = "RETIRED" if status else "REACTIVATED"
+                scope = f"in **{mode.value}**" if mode.value != "all" else "across the **Network**"
+                
+                embed = discord.Embed(
+                    title="🛡️ Status Update", 
+                    description=f"**{player}** has been **{status_text}** {scope}.", 
+                    color=discord.Color.dark_grey() if status else discord.Color.green()
+                )
+                embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
+                await ch.send(embed=embed)
+            except: pass
+        await interaction.response.send_message(f"✅ {player} {mode.value} status set to retired={status}", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"❌ No records found for {player} in {mode.value}.", ephemeral=True)
 
 @bot.tree.command(name="add_partner", description="Add a sponsor to the website")
 async def add_partner(interaction: discord.Interaction, name: str, img_url: str, link: str):
