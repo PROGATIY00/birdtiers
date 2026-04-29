@@ -50,7 +50,7 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
-@bot.tree.command(name="rank", description="Set a player's tier and region")
+@bot.tree.command(name="rank", description="Set a player's tier")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
@@ -65,32 +65,64 @@ async def rank(interaction: discord.Interaction, player: str, mode: app_commands
     if tier_upper not in TIER_ORDER:
         return await interaction.followup.send(f"Invalid Tier. Use: {', '.join(TIER_ORDER)}")
 
+    # Logic for Previous and Peak Tiers
+    existing = players_col.find_one({"username": player, "gamemode": mode.value})
+    status_text = "Placed into"
+    old_tier = "None"
+    peak_tier = tier_upper
+
+    if existing:
+        old_tier = existing.get('tier', 'None')
+        peak_tier = existing.get('peak', tier_upper)
+        
+        # Determine status text
+        if TIER_ORDER.index(tier_upper) > TIER_ORDER.index(old_tier):
+            status_text = "Promoted to"
+        elif TIER_ORDER.index(tier_upper) < TIER_ORDER.index(old_tier):
+            status_text = "Demoted to"
+        else:
+            status_text = "Updated in"
+            
+        # Update peak if new tier is higher
+        if TIER_ORDER.index(tier_upper) > TIER_ORDER.index(peak_tier):
+            peak_tier = tier_upper
+
+    # Update Database
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {
             "username": player, "gamemode": mode.value, "tier": tier_upper, 
-            "region": region.value, "retired": False, "last_updated": datetime.datetime.utcnow()
+            "region": region.value, "peak": peak_tier, "retired": False, "last_updated": datetime.datetime.utcnow()
         }},
         upsert=True
     )
 
+    # Logging with the exact requested format
     if LOG_CHANNEL_ID:
         try:
             chan = bot.get_channel(int(LOG_CHANNEL_ID))
             if chan:
-                embed = discord.Embed(title="📈 Tier Updated", color=discord.Color.orange(), timestamp=datetime.datetime.utcnow())
-                embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-                embed.add_field(name="Player", value=player, inline=True)
-                embed.add_field(name="Tier", value=tier_upper, inline=True)
-                embed.add_field(name="Region", value=region.value, inline=True)
+                embed = discord.Embed(
+                    title="Tier Update", 
+                    description=f"**{player}** has been **{status_text}** **{tier_upper}**!",
+                    color=discord.Color.orange(), 
+                    timestamp=datetime.datetime.utcnow()
+                )
+                embed.add_field(name="Gamemode", value=mode.value, inline=False)
+                embed.add_field(name="Region", value=region.value, inline=False)
+                embed.add_field(name="Previous Tier", value=old_tier, inline=False)
+                embed.add_field(name="Peak Tier", value=peak_tier, inline=False)
+                embed.set_footer(text="MagmaTIERS Official Feed")
                 await chan.send(embed=embed)
-        except: pass
+        except Exception as e: 
+            print(f"Log error: {e}")
 
-    await interaction.followup.send(f"✅ Updated **{player}** to **{tier_upper}** ({region.value})")
+    await interaction.followup.send(f"✅ Updated **{player}** to **{tier_upper}**")
 
 # --- WEB UI (FLASK) ---
 app = Flask(__name__)
 
+# [HTML Template remains same as previous version for the leaderboard UI]
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -151,33 +183,28 @@ def index():
     mode_f = request.args.get('mode', '')
     region_f = request.args.get('region', '').upper()
     search_q = request.args.get('search', '').strip().lower()
-    
     raw_players = list(players_col.find({"retired": False}))
     stats = {}
-    
     for p in raw_players:
         u, t, gm, reg = p['username'], p['tier'], p['gamemode'], p.get('region', 'NA')
         if region_f and reg != region_f: continue
         if search_q and search_q not in u.lower(): continue
-            
         val = TIER_DATA.get(t, 0)
         if u not in stats: stats[u] = {"pts": 0, "tier": t, "region": reg}
-        
         if mode_f:
             if gm.lower() == mode_f.lower(): stats[u].update({"pts": val, "tier": t})
             else: stats[u]["pts"] = -1
         else:
             stats[u]["pts"] += val
-
     processed = sorted([
         {"username": u, "points": int(d["pts"]), "tier": d["tier"], "region": d["region"], "rank_name": get_global_rank(d["pts"])} 
         for u, d in stats.items() if d["pts"] > 0
     ], key=lambda x: -x["points"])
-
     return render_template_string(HTML_TEMPLATE, players=processed, search_query=search_q, all_modes=MODES, all_regions=REGIONS, current_mode=mode_f, current_region=region_f)
 
 def run_flask():
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 if __name__ == '__main__':
     threading.Thread(target=run_flask, daemon=True).start()
