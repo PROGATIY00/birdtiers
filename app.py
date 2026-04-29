@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, jsonify
 from pymongo import MongoClient
 import os
 import threading
@@ -44,18 +44,18 @@ class MagmaBot(discord.Client):
 
     async def setup_hook(self):
         await self.tree.sync()
-        print("✅ Slash commands synced.")
+        print("✅ Discord Slash Commands Synced.")
 
 bot = MagmaBot()
 
-@bot.tree.command(name="rank", description="Update player tier")
+@bot.tree.command(name="rank", description="Update player tier & region")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
 async def rank(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str]):
     if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
+        return await interaction.response.send_message("❌ Staff only (Manage Roles required).", ephemeral=True)
 
     await interaction.response.defer(ephemeral=True)
     tier_upper = tier.upper().strip()
@@ -97,10 +97,25 @@ async def rank(interaction: discord.Interaction, player: str, mode: app_commands
                 await chan.send(embed=embed)
         except: pass
 
-    await interaction.followup.send(f"✅ Updated **{player}**.")
+    await interaction.followup.send(f"✅ Updated **{player}** successfully.")
 
-# --- WEB UI ---
+# --- WEB UI & API (FLASK) ---
 app = Flask(__name__)
+
+# --- API ENDPOINT ---
+@app.route('/api/player/<username>')
+def get_player_api(username):
+    p_data = list(players_col.find({"username": {"$regex": f"^{username}$", "$options": "i"}}))
+    if not p_data:
+        return jsonify({"username": username, "tested": False, "ranks": {}}), 404
+    
+    response = {
+        "username": p_data[0]['username'],
+        "tested": True,
+        "region": p_data[0].get('region', 'NA'),
+        "ranks": {d['gamemode']: d['tier'] for d in p_data}
+    }
+    return jsonify(response)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -119,22 +134,24 @@ HTML_TEMPLATE = """
         .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
         .region-btn.active { border-color: #5865F2; color: white; background: #23272a; }
         
-        /* Modal */
+        /* Modal Overlay */
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:1001; display:flex; justify-content:center; align-items:center; backdrop-filter: blur(5px); }
-        .profile-modal { background: #11141c; width: 450px; border-radius: 20px; border: 2px solid #2d3647; padding: 30px; position: relative; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .modal-avatar { width: 90px; height: 90px; border-radius: 15px; border: 3px solid var(--accent); margin-bottom: 15px; }
-        .mode-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; text-align: left; }
-        .mode-stat-card { background: #1a1d26; padding: 10px; border-radius: 8px; border: 1px solid var(--border); }
-        .mode-stat-card span { display: block; font-size: 10px; color: var(--dim); text-transform: uppercase; }
-        .mode-stat-card b { color: var(--accent); font-size: 14px; }
+        .profile-modal { background: #11141c; width: 420px; border-radius: 20px; border: 2px solid #2d3647; padding: 30px; position: relative; text-align: center; }
+        .modal-avatar { width: 90px; height: 90px; border-radius: 12px; border: 3px solid var(--accent); margin-bottom: 15px; }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
+        .stat-card { background: #1a1d26; padding: 10px; border-radius: 8px; border: 1px solid var(--border); text-align: left; }
+        .stat-card span { font-size: 9px; color: var(--dim); text-transform: uppercase; display: block; }
+        .stat-card b { color: var(--accent); font-size: 13px; }
 
         .wrapper { max-width: 950px; margin: auto; padding: 25px; }
         .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 15px 25px; margin-bottom: 10px; display: grid; grid-template-columns: 40px 50px 1fr 80px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
         .player-row:hover { border-color: var(--accent); background: #1a1d26; transform: translateY(-2px); }
+        
         .insane-row { position: relative; background: var(--card) !important; z-index: 1; border-radius: 12px; }
         .insane-row::before { content: ''; position: absolute; inset: -2px; z-index: -1; background: conic-gradient(from var(--angle), transparent 70%, #ff4500, #ff8c00, #ff4500); animation: rotate 2s linear infinite; border-radius: 14px; }
         @property --angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
         @keyframes rotate { to { --angle: 360deg; } }
+        
         .rank-badge { font-size: 10px; padding: 2px 8px; border: 1px solid var(--accent); border-radius: 4px; margin-left: 10px; color: var(--accent); text-transform: uppercase; font-weight: 800; }
         .NA { color: #ff6b6b; } .EU { color: #51cf66; } .ASIA { color: #fcc419; } .AF { color: #ae3ec9; } .OC { color: #20c997; } .SA { color: #4dabf7; }
     </style>
@@ -149,7 +166,6 @@ HTML_TEMPLATE = """
         <a href="/?region={{current_region}}" class="mode-btn {% if not current_mode %}active{% endif %}">GLOBAL</a>
         {% for m in all_modes %}<a href="/?mode={{m}}&region={{current_region}}" class="mode-btn {% if current_mode == m %}active{% endif %}">{{m|upper}}</a>{% endfor %}
     </div>
-    
     <div class="sub-nav">
         <a href="/?mode={{current_mode}}" class="mode-btn region-btn {% if not current_region %}active{% endif %}">ALL REGIONS</a>
         {% for r in all_regions %}<a href="/?region={{r}}&mode={{current_mode}}" class="mode-btn region-btn {% if current_region == r %}active{% endif %}">{{r}}</a>{% endfor %}
@@ -162,13 +178,9 @@ HTML_TEMPLATE = """
             <img src="https://minotar.net/helm/{{spotlight.username}}/100.png" class="modal-avatar">
             <h2 style="margin:0;">{{ spotlight.username }}</h2>
             <p style="color:var(--dim); font-size:12px; margin:5px 0;">#{{ spotlight.pos }} OVERALL | <span class="{{spotlight.region}}">{{ spotlight.region }}</span></p>
-            
-            <div class="mode-stat-grid">
+            <div class="stat-grid">
                 {% for stat in spotlight.all_stats %}
-                <div class="mode-stat-card">
-                    <span>{{ stat.gamemode }}</span>
-                    <b>{{ stat.tier }}</b>
-                </div>
+                <div class="stat-card"><span>{{ stat.gamemode }}</span><b>{{ stat.tier }}</b></div>
                 {% endfor %}
             </div>
         </div>
@@ -200,40 +212,23 @@ def index():
     stats = {}
     
     for p in raw_players:
-        u = p['username']
-        t = p['tier']
-        gm = p['gamemode']
-        reg = p.get('region', 'NA')
-        
-        # Region Filter
-        if region_f and reg != region_f:
-            continue
+        u, t, gm, reg = p['username'], p['tier'], p['gamemode'], p.get('region', 'NA')
+        if region_f and reg != region_f: continue
             
         val = TIER_DATA.get(t, 0)
+        if u not in stats: stats[u] = {"pts": 0, "tier": t, "region": reg, "active_modes": []}
         
-        if u not in stats:
-            stats[u] = {"pts": 0, "tier": t, "region": reg, "modes_active": []}
-        
-        # FIX: Track all modes for every player
-        stats[u]["modes_active"].append(gm.lower())
-        
-        # Point Calculation: If a mode is selected, only count points for that mode
+        stats[u]["active_modes"].append(gm.lower())
         if mode_f:
             if gm.lower() == mode_f.lower():
-                stats[u]["pts"] = val # Override to show only mode score
-                stats[u]["tier"] = t
-            # If they don't have this mode, we mark pts as -2 to filter them out later
-            elif stats[u]["pts"] <= 0:
-                stats[u]["pts"] = -2 
-        else:
-            # Global view: Sum up all points
-            stats[u]["pts"] += val
+                stats[u].update({"pts": val, "tier": t})
+            elif stats[u]["pts"] <= 0: stats[u]["pts"] = -2
+        else: stats[u]["pts"] += val
 
-    # Final Filter: Only keep players who matched the mode (if one was selected)
     processed = []
     for u, d in stats.items():
         if mode_f:
-            if mode_f.lower() in d["modes_active"]:
+            if mode_f.lower() in d["active_modes"]:
                 processed.append({"username": u, "points": int(d["pts"]), "tier": d["tier"], "region": d["region"], "rank_name": get_global_rank(d["pts"])})
         elif d["pts"] > 0:
             processed.append({"username": u, "points": int(d["pts"]), "tier": d["tier"], "region": d["region"], "rank_name": get_global_rank(d["pts"])})
@@ -242,20 +237,12 @@ def index():
 
     spotlight = None
     if search_q:
-        pos = next((i + 1 for i, p in enumerate(processed) if p['username'].lower() == search_q), "?")
         p_data = list(players_col.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}}))
         if p_data:
-            spotlight = {
-                "username": p_data[0]['username'],
-                "pos": pos,
-                "region": p_data[0].get('region', 'NA'),
-                "all_stats": [{"gamemode": d['gamemode'], "tier": d['tier']} for d in p_data]
-            }
+            pos = next((i + 1 for i, p in enumerate(processed) if p['username'].lower() == search_q), "?")
+            spotlight = {"username": p_data[0]['username'], "pos": pos, "region": p_data[0].get('region', 'NA'), "all_stats": [{"gamemode": d['gamemode'], "tier": d['tier']} for d in p_data]}
 
-    return render_template_string(HTML_TEMPLATE, 
-        players=processed, spotlight=spotlight, search_query=search_q, 
-        all_modes=MODES, all_regions=REGIONS, current_mode=mode_f, current_region=region_f
-    )
+    return render_template_string(HTML_TEMPLATE, players=processed, spotlight=spotlight, search_query=search_q, all_modes=MODES, all_regions=REGIONS, current_mode=mode_f, current_region=region_f)
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
