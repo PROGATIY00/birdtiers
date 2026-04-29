@@ -45,41 +45,85 @@ class MagmaBot(discord.Client):
         await self.tree.sync()
 
 bot = MagmaBot()
-
-@bot.tree.command(name="rank", description="Set a player's tier")
+@bot.tree.command(name="rank", description="Set a player's tier with detailed logging")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
 async def rank(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str]):
-    if not interaction.user.guild_permissions.administrator: return
-    tier = tier.upper().strip()
-    if tier not in TIER_ORDER: return await interaction.response.send_message("Invalid Tier", ephemeral=True)
-    
-    existing = players_col.find_one({"username": player, "gamemode": mode.value})
-    status_text, color = "Placed into", discord.Color.blue()
-    
-    if existing:
-        old_t = existing.get('tier', 'LT5')
-        if TIER_ORDER.index(tier) > TIER_ORDER.index(old_t): status_text, color = "Promoted to", discord.Color.green()
-        elif TIER_ORDER.index(tier) < TIER_ORDER.index(old_t): status_text, color = "Demoted to", discord.Color.red()
-        else: status_text, color = "Updated in", discord.Color.gold()
+    if not interaction.user.guild_permissions.administrator: 
+        return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
 
+    tier = tier.upper().strip()
+    if tier not in TIER_ORDER: 
+        return await interaction.response.send_message(f"Invalid Tier. Use: {', '.join(TIER_ORDER)}", ephemeral=True)
+
+    # 1. Fetch current data for logic
+    existing = players_col.find_one({"username": player, "gamemode": mode.value})
+    
+    status_text = "Placed into"
+    color = discord.Color.blue()
+    old_tier = "None"
+    peak_tier = tier
+
+    if existing:
+        old_tier = existing.get('tier', 'LT5')
+        peak_tier = existing.get('peak', tier)
+        
+        # Check if new tier is higher than current peak
+        if TIER_ORDER.index(tier) > TIER_ORDER.index(peak_tier):
+            peak_tier = tier
+            
+        # Determine Promotion/Demotion status
+        if TIER_ORDER.index(tier) > TIER_ORDER.index(old_tier):
+            status_text = "Promoted to"
+            color = discord.Color.green()
+        elif TIER_ORDER.index(tier) < TIER_ORDER.index(old_tier):
+            status_text = "Demoted to"
+            color = discord.Color.red()
+        else:
+            status_text = "Updated in"
+            color = discord.Color.gold()
+
+    # 2. Update Database
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
-        {"$set": {"username": player, "gamemode": mode.value, "tier": tier, "region": region.value, "peak": tier, "retired": False}},
+        {"$set": {
+            "username": player, 
+            "gamemode": mode.value, 
+            "tier": tier, 
+            "region": region.value, 
+            "peak": peak_tier, 
+            "retired": False
+        }},
         upsert=True
     )
 
+    # 3. Enhanced Logging (Exact Format)
     if LOG_CHANNEL_ID:
         try:
-            ch = await bot.fetch_channel(int(LOG_CHANNEL_ID))
-            embed = discord.Embed(title="📈 Tier Update", description=f"**{player}** has been **{status_text}** **{tier}** in **{mode.value}**!", color=color)
+            channel = await bot.fetch_channel(int(LOG_CHANNEL_ID))
+            embed = discord.Embed(
+                title="📈 Tier Update",
+                description=f"**{player}** has been **{status_text}** **{tier}**!",
+                color=color,
+                timestamp=datetime.datetime.utcnow()
+            )
             embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-            await ch.send(embed=embed)
-        except: pass
-    await interaction.response.send_message(f"✅ Updated {player}", ephemeral=True)
+            
+            # Formatted Fields
+            embed.add_field(name="🎮 Gamemode", value=mode.value, inline=False)
+            embed.add_field(name="🌍 Region", value=region.value, inline=False)
+            embed.add_field(name="📊 Previous Tier", value=old_tier, inline=False)
+            embed.add_field(name="🏔️ Peak Tier", value=peak_tier, inline=False)
+            
+            embed.set_footer(text="MagmaTIERS Official Feed")
+            
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"Log Error: {e}")
 
+    await interaction.response.send_message(f"✅ Successfully updated **{player}**.", ephemeral=True)
 @bot.tree.command(name="retire", description="Hide player from leaderboard")
 @app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES] + [app_commands.Choice(name="All", value="all")])
 async def retire(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str], status: bool):
