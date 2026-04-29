@@ -155,7 +155,6 @@ HTML_TEMPLATE = """
         {% for r in all_regions %}<a href="/?region={{r}}&mode={{current_mode}}" class="mode-btn region-btn {% if current_region == r %}active{% endif %}">{{r}}</a>{% endfor %}
     </div>
 
-    <!-- MULTI-GAMEMODE PROFILE MODAL -->
     {% if spotlight %}
     <div class="modal-overlay">
         <div class="profile-modal">
@@ -193,35 +192,57 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    mode_f = request.args.get('mode', '')
-    region_f = request.args.get('region', '').upper()
+    mode_f = request.args.get('mode', '').strip()
+    region_f = request.args.get('region', '').strip().upper()
     search_q = request.args.get('search', '').strip().lower()
     
     raw_players = list(players_col.find({"retired": False}))
     stats = {}
     
     for p in raw_players:
-        u, t, gm, reg = p['username'], p['tier'], p['gamemode'], p.get('region', 'NA')
-        if region_f and reg != region_f: continue
+        u = p['username']
+        t = p['tier']
+        gm = p['gamemode']
+        reg = p.get('region', 'NA')
+        
+        # Region Filter
+        if region_f and reg != region_f:
+            continue
+            
         val = TIER_DATA.get(t, 0)
         
-        if u not in stats: stats[u] = {"pts": 0, "tier": t, "region": reg}
+        if u not in stats:
+            stats[u] = {"pts": 0, "tier": t, "region": reg, "modes_active": []}
+        
+        # FIX: Track all modes for every player
+        stats[u]["modes_active"].append(gm.lower())
+        
+        # Point Calculation: If a mode is selected, only count points for that mode
         if mode_f:
-            if gm.lower() == mode_f.lower(): stats[u].update({"pts": val, "tier": t})
-            else: stats[u]["pts"] = -1
+            if gm.lower() == mode_f.lower():
+                stats[u]["pts"] = val # Override to show only mode score
+                stats[u]["tier"] = t
+            # If they don't have this mode, we mark pts as -2 to filter them out later
+            elif stats[u]["pts"] <= 0:
+                stats[u]["pts"] = -2 
         else:
+            # Global view: Sum up all points
             stats[u]["pts"] += val
 
-    processed = sorted([
-        {"username": u, "points": int(d["pts"]), "tier": d["tier"], "region": d["region"], "rank_name": get_global_rank(d["pts"])} 
-        for u, d in stats.items() if d["pts"] > 0
-    ], key=lambda x: -x["points"])
+    # Final Filter: Only keep players who matched the mode (if one was selected)
+    processed = []
+    for u, d in stats.items():
+        if mode_f:
+            if mode_f.lower() in d["modes_active"]:
+                processed.append({"username": u, "points": int(d["pts"]), "tier": d["tier"], "region": d["region"], "rank_name": get_global_rank(d["pts"])})
+        elif d["pts"] > 0:
+            processed.append({"username": u, "points": int(d["pts"]), "tier": d["tier"], "region": d["region"], "rank_name": get_global_rank(d["pts"])})
+
+    processed = sorted(processed, key=lambda x: -x["points"])
 
     spotlight = None
     if search_q:
-        # Get overall rank pos
         pos = next((i + 1 for i, p in enumerate(processed) if p['username'].lower() == search_q), "?")
-        # Fetch all gamemodes for this specific player
         p_data = list(players_col.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}}))
         if p_data:
             spotlight = {
