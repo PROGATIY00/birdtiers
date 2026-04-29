@@ -23,8 +23,6 @@ TIER_DATA = {t: (i + 1) * 5 for i, t in enumerate(TIER_ORDER)}
 client_db = MongoClient(MONGO_URI)
 db_mongo = client_db['magmatiers_db']
 players_col = db_mongo['players']
-partners_col = db_mongo['partners']
-settings_col = db_mongo['settings']
 
 def get_global_rank(pts):
     if pts >= 500: return "Combat Grandmaster"
@@ -65,7 +63,6 @@ async def rank(interaction: discord.Interaction, player: str, mode: app_commands
     if tier_upper not in TIER_ORDER:
         return await interaction.followup.send(f"Invalid Tier. Use: {', '.join(TIER_ORDER)}")
 
-    # Logic for Previous and Peak Tiers
     existing = players_col.find_one({"username": player, "gamemode": mode.value})
     status_text = "Placed into"
     old_tier = "None"
@@ -74,20 +71,11 @@ async def rank(interaction: discord.Interaction, player: str, mode: app_commands
     if existing:
         old_tier = existing.get('tier', 'None')
         peak_tier = existing.get('peak', tier_upper)
-        
-        # Determine status text
-        if TIER_ORDER.index(tier_upper) > TIER_ORDER.index(old_tier):
-            status_text = "Promoted to"
-        elif TIER_ORDER.index(tier_upper) < TIER_ORDER.index(old_tier):
-            status_text = "Demoted to"
-        else:
-            status_text = "Updated in"
-            
-        # Update peak if new tier is higher
-        if TIER_ORDER.index(tier_upper) > TIER_ORDER.index(peak_tier):
-            peak_tier = tier_upper
+        if TIER_ORDER.index(tier_upper) > TIER_ORDER.index(old_tier): status_text = "Promoted to"
+        elif TIER_ORDER.index(tier_upper) < TIER_ORDER.index(old_tier): status_text = "Demoted to"
+        else: status_text = "Updated in"
+        if TIER_ORDER.index(tier_upper) > TIER_ORDER.index(peak_tier): peak_tier = tier_upper
 
-    # Update Database
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {
@@ -97,32 +85,24 @@ async def rank(interaction: discord.Interaction, player: str, mode: app_commands
         upsert=True
     )
 
-    # Logging with the exact requested format
     if LOG_CHANNEL_ID:
         try:
             chan = bot.get_channel(int(LOG_CHANNEL_ID))
             if chan:
-                embed = discord.Embed(
-                    title="Tier Update", 
-                    description=f"**{player}** has been **{status_text}** **{tier_upper}**!",
-                    color=discord.Color.orange(), 
-                    timestamp=datetime.datetime.utcnow()
-                )
+                embed = discord.Embed(title="Tier Update", description=f"**{player}** has been **{status_text}** **{tier_upper}**!", color=discord.Color.orange(), timestamp=datetime.datetime.utcnow())
                 embed.add_field(name="Gamemode", value=mode.value, inline=False)
                 embed.add_field(name="Region", value=region.value, inline=False)
                 embed.add_field(name="Previous Tier", value=old_tier, inline=False)
                 embed.add_field(name="Peak Tier", value=peak_tier, inline=False)
                 embed.set_footer(text="MagmaTIERS Official Feed")
                 await chan.send(embed=embed)
-        except Exception as e: 
-            print(f"Log error: {e}")
+        except: pass
 
     await interaction.followup.send(f"✅ Updated **{player}** to **{tier_upper}**")
 
 # --- WEB UI (FLASK) ---
 app = Flask(__name__)
 
-# [HTML Template remains same as previous version for the leaderboard UI]
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -153,7 +133,7 @@ HTML_TEMPLATE = """
 <body>
     <div class="navbar">
         <a href="/" class="logo">Magma<span>TIERS</span></a>
-        <form action="/"><input type="text" name="search" style="background:#0b0c10; border:1px solid var(--border); padding:8px 18px; border-radius:20px; color:white;" placeholder="Search..." value="{{ search_query }}"></form>
+        <form action="/"><input type="text" name="search" style="background:#0b0c10; border:1px solid var(--border); padding:8px 18px; border-radius:20px; color:white; outline:none;" placeholder="Search..." value="{{ search_query }}"></form>
     </div>
     <div class="sub-nav">
         <a href="/?region={{current_region}}" class="mode-btn {% if not current_mode %}active{% endif %}">GLOBAL</a>
@@ -165,7 +145,7 @@ HTML_TEMPLATE = """
     </div>
     <div class="wrapper">
         {% for p in players %}
-        <a href="#" class="player-row {% if p.tier in ['HT1', 'LT1'] %}insane-row{% endif %}">
+        <a href="/?search={{p.username}}" class="player-row {% if p.tier in ['HT1', 'LT1'] %}insane-row{% endif %}">
             <div style="font-weight:800; color:var(--accent)">#{{ loop.index }}</div>
             <img src="https://minotar.net/helm/{{p.username}}/35.png" style="border-radius:6px;">
             <div><b>{{ p.username }}</b> <span class="rank-badge">{{ p.rank_name }}</span></div>
@@ -194,8 +174,7 @@ def index():
         if mode_f:
             if gm.lower() == mode_f.lower(): stats[u].update({"pts": val, "tier": t})
             else: stats[u]["pts"] = -1
-        else:
-            stats[u]["pts"] += val
+        else: stats[u]["pts"] += val
     processed = sorted([
         {"username": u, "points": int(d["pts"]), "tier": d["tier"], "region": d["region"], "rank_name": get_global_rank(d["pts"])} 
         for u, d in stats.items() if d["pts"] > 0
