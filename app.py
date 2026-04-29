@@ -19,11 +19,6 @@ REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 TIER_DATA = {t: (i + 1) * 5 for i, t in enumerate(TIER_ORDER)}
 
-MODE_ICONS = {
-    "Crystal": "https://i.imgur.com/8QO5W5M.png",
-    "UHC": "https://i.imgur.com/K4zI904.png",
-}
-
 # --- DB SETUP ---
 client_db = MongoClient(MONGO_URI)
 db_mongo = client_db['magmatiers_db']
@@ -38,157 +33,107 @@ def get_global_rank(pts):
     if pts >= 50:  return "Combat Specialist"
     if pts >= 25:  return "Combat Cadet"
     if pts >= 10:  return "Combat Novice"
-    if pts >= 1:   return "Rookie"
-    return "Unranked"
+    return "Rookie"
 
 # --- DISCORD BOT ---
 class MagmaBot(discord.Client):
     def __init__(self):
-        super().__init__(intents=discord.Intents.all())
+        intents = discord.Intents.default()
+        intents.members = True
+        intents.message_content = True
+        super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
+
     async def setup_hook(self):
         await self.tree.sync()
+        print("✅ Slash commands synced.")
 
 bot = MagmaBot()
 
-@bot.tree.command(name="rank", description="Set a player's tier")
+@bot.tree.command(name="rank", description="Set a player's tier and region")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
 async def rank(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str]):
-    if not interaction.user.guild_permissions.manage_roles: 
-        return await interaction.response.send_message("❌ Manage Roles required.", ephemeral=True)
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
 
-    tier = tier.upper().strip()
-    if tier not in TIER_ORDER: 
-        return await interaction.response.send_message(f"Invalid Tier.", ephemeral=True)
-
-    existing = players_col.find_one({"username": player, "gamemode": mode.value})
-    status_text, color, old_tier = "Placed into", discord.Color.blue(), "None"
-    peak_tier = tier
-
-    if existing:
-        old_tier = existing.get('tier', 'LT5')
-        peak_tier = existing.get('peak', tier)
-        if TIER_ORDER.index(tier) > TIER_ORDER.index(peak_tier): peak_tier = tier
-        
-        if TIER_ORDER.index(tier) > TIER_ORDER.index(old_tier): status_text, color = "Promoted to", discord.Color.green()
-        elif TIER_ORDER.index(tier) < TIER_ORDER.index(old_tier): status_text, color = "Demoted to", discord.Color.red()
-        else: status_text, color = "Updated in", discord.Color.gold()
+    await interaction.response.defer(ephemeral=True)
+    
+    tier_upper = tier.upper().strip()
+    if tier_upper not in TIER_ORDER:
+        return await interaction.followup.send(f"Invalid Tier. Use: {', '.join(TIER_ORDER)}")
 
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {
-            "username": player, "gamemode": mode.value, "tier": tier, 
-            "region": region.value, "peak": peak_tier, "retired": False
+            "username": player, "gamemode": mode.value, "tier": tier_upper, 
+            "region": region.value, "retired": False, "last_updated": datetime.datetime.utcnow()
         }},
         upsert=True
     )
 
     if LOG_CHANNEL_ID:
         try:
-            channel = await bot.fetch_channel(int(LOG_CHANNEL_ID))
-            embed = discord.Embed(title="📈 Tier Update", description=f"**{player}** has been **{status_text}** **{tier}**!", color=color, timestamp=datetime.datetime.utcnow())
-            embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-            embed.add_field(name="🎮 Gamemode", value=mode.value, inline=True)
-            embed.add_field(name="🌍 Region", value=region.value, inline=True)
-            await channel.send(embed=embed)
+            chan = bot.get_channel(int(LOG_CHANNEL_ID))
+            if chan:
+                embed = discord.Embed(title="📈 Tier Updated", color=discord.Color.orange(), timestamp=datetime.datetime.utcnow())
+                embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
+                embed.add_field(name="Player", value=player, inline=True)
+                embed.add_field(name="Tier", value=tier_upper, inline=True)
+                embed.add_field(name="Region", value=region.value, inline=True)
+                await chan.send(embed=embed)
         except: pass
 
-    await interaction.response.send_message(f"✅ Updated **{player}**.", ephemeral=True)
+    await interaction.followup.send(f"✅ Updated **{player}** to **{tier_upper}** ({region.value})")
 
-# --- WEB UI ---
+# --- WEB UI (FLASK) ---
 app = Flask(__name__)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MagmaTIERS | Leaderboard</title>
+    <title>MagmaTIERS | Official Leaderboard</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;800&display=swap');
         :root { --bg: #0b0c10; --card: #14171f; --border: #262932; --accent: #ff4500; --text: #e0e6ed; --dim: #8b949e; }
         body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
-        
         .navbar { background: #0f1117; padding: 15px 50px; border-bottom: 3px solid var(--accent); display: flex; justify-content: space-between; align-items: center; position: sticky; top:0; z-index: 100;}
         .logo { color: white; font-weight: 800; font-size: 26px; text-decoration: none; text-transform: uppercase; }
         .logo span { color: var(--accent); }
-        
-        /* Secondary Navigation Bars */
         .sub-nav { display: flex; justify-content:center; gap: 8px; padding: 10px; background: #0f1117; border-bottom: 1px solid var(--border); overflow-x: auto; }
         .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 11px; transition: 0.2s; white-space: nowrap; }
         .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
         .region-btn.active { border-color: #5865F2; color: white; background: #23272a; }
-
         .wrapper { max-width: 950px; margin: auto; padding: 25px; }
-        .player-row { 
-            background: var(--card); border: 1px solid var(--border); border-radius: 12px; 
-            padding: 15px 25px; margin-bottom: 10px; display: grid; 
-            grid-template-columns: 40px 50px 1fr 80px 100px; align-items: center; 
-            text-decoration: none; color: inherit; transition: 0.2s;
-        }
+        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 15px 25px; margin-bottom: 10px; display: grid; grid-template-columns: 40px 50px 1fr 80px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
         .player-row:hover { border-color: var(--accent); background: #1a1d26; transform: translateY(-2px); }
-        
-        /* High Tier Glow */
         @property --angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
         @keyframes rotate { to { --angle: 360deg; } }
         .insane-row { position: relative; background: var(--card) !important; z-index: 1; border-radius: 12px; }
         .insane-row::before { content: ''; position: absolute; inset: -2px; z-index: -1; background: conic-gradient(from var(--angle), transparent 70%, #ff4500, #ff8c00, #ff4500); animation: rotate 2s linear infinite; border-radius: 14px; }
-
         .rank-badge { font-size: 10px; padding: 2px 8px; border: 1px solid var(--accent); border-radius: 4px; margin-left: 10px; color: var(--accent); text-transform: uppercase; font-weight: 800; }
         .NA { color: #ff6b6b; } .EU { color: #51cf66; } .ASIA { color: #fcc419; } .AF { color: #ae3ec9; } .OC { color: #20c997; } .SA { color: #4dabf7; }
-        
-        /* Modal */
-        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:1001; display:flex; justify-content:center; align-items:center; }
-        .profile-modal { background: #11141c; width: 450px; border-radius: 20px; border: 2px solid #2d3647; padding: 40px; position: relative; text-align: center; }
-        .modal-avatar { width: 100px; height: 100px; border-radius: 50%; border: 3px solid var(--accent); margin-bottom: 15px; }
     </style>
 </head>
 <body>
     <div class="navbar">
         <a href="/" class="logo">Magma<span>TIERS</span></a>
-        <div style="display:flex; align-items:center; gap:20px;">
-            <form action="/"><input type="text" name="search" style="background:#0b0c10; border:1px solid var(--border); padding:8px 18px; border-radius:20px; color:white; outline:none;" placeholder="Search player..." value="{{ search_query }}"></form>
-            <a href="{{ invite_link }}" target="_blank" style="background:#5865F2; color:white; text-decoration:none; padding:10px 20px; border-radius:8px; font-weight:600;">Discord</a>
-        </div>
+        <form action="/"><input type="text" name="search" style="background:#0b0c10; border:1px solid var(--border); padding:8px 18px; border-radius:20px; color:white;" placeholder="Search..." value="{{ search_query }}"></form>
     </div>
-    
-    <!-- MODE NAVIGATION -->
-    <div class="sub-nav" style="background: #0d0f14;">
-        <a href="/?region={{current_region}}" class="mode-btn {% if not current_mode %}active{% endif %}">GLOBAL MODES</a>
-        {% for m in all_modes %}
-        <a href="/?mode={{m}}&region={{current_region}}" class="mode-btn {% if current_mode == m %}active{% endif %}">{{m|upper}}</a>
-        {% endfor %}
+    <div class="sub-nav">
+        <a href="/?region={{current_region}}" class="mode-btn {% if not current_mode %}active{% endif %}">GLOBAL</a>
+        {% for m in all_modes %}<a href="/?mode={{m}}&region={{current_region}}" class="mode-btn {% if current_mode == m %}active{% endif %}">{{m|upper}}</a>{% endfor %}
     </div>
-
-    <!-- REGION NAVIGATION -->
     <div class="sub-nav">
         <a href="/?mode={{current_mode}}" class="mode-btn region-btn {% if not current_region %}active{% endif %}">ALL REGIONS</a>
-        {% for r in all_regions %}
-        <a href="/?region={{r}}&mode={{current_mode}}" class="mode-btn region-btn {% if current_region == r %}active{% endif %}">{{r}}</a>
-        {% endfor %}
+        {% for r in all_regions %}<a href="/?region={{r}}&mode={{current_mode}}" class="mode-btn region-btn {% if current_region == r %}active{% endif %}">{{r}}</a>{% endfor %}
     </div>
-
-    {% if spotlight %}
-    <div class="modal-overlay">
-        <div class="profile-modal">
-            <a href="/" style="position:absolute; top:15px; right:20px; color:#555; text-decoration:none; font-size:24px;">×</a>
-            <img src="https://minotar.net/helm/{{spotlight.username}}/100.png" class="modal-avatar">
-            <h1 style="margin:0;">{{ spotlight.username }}</h1>
-            <p style="color:var(--accent); font-weight:800; margin-top:5px;">#{{ spotlight.pos }} OVERALL | {{ spotlight.region }}</p>
-        </div>
-    </div>
-    {% endif %}
-
     <div class="wrapper">
-        <h3 style="margin-bottom:20px; color:var(--dim);">
-            Ranking: <span style="color:white;">{{ current_mode if current_mode else 'Global' }}</span> 
-            {% if current_region %} in <span style="color:#5865F2;">{{ current_region }}</span>{% endif %}
-        </h3>
-        
         {% for p in players %}
-        <a href="/?search={{p.username}}" class="player-row {% if p.tier in ['HT1', 'LT1'] %}insane-row{% endif %}">
+        <a href="#" class="player-row {% if p.tier in ['HT1', 'LT1'] %}insane-row{% endif %}">
             <div style="font-weight:800; color:var(--accent)">#{{ loop.index }}</div>
             <img src="https://minotar.net/helm/{{p.username}}/35.png" style="border-radius:6px;">
             <div><b>{{ p.username }}</b> <span class="rank-badge">{{ p.rank_name }}</span></div>
@@ -212,16 +157,15 @@ def index():
     
     for p in raw_players:
         u, t, gm, reg = p['username'], p['tier'], p['gamemode'], p.get('region', 'NA')
-        
-        # Region Filter: Skip if player is not in selected region
         if region_f and reg != region_f: continue
+        if search_q and search_q not in u.lower(): continue
             
         val = TIER_DATA.get(t, 0)
         if u not in stats: stats[u] = {"pts": 0, "tier": t, "region": reg}
         
         if mode_f:
             if gm.lower() == mode_f.lower(): stats[u].update({"pts": val, "tier": t})
-            else: stats[u]["pts"] = -1 # Flag for removal
+            else: stats[u]["pts"] = -1
         else:
             stats[u]["pts"] += val
 
@@ -230,28 +174,11 @@ def index():
         for u, d in stats.items() if d["pts"] > 0
     ], key=lambda x: -x["points"])
 
-    spotlight = None
-    if search_q:
-        res = list(players_col.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}, "retired": False}))
-        if res:
-            pos = next((i + 1 for i, p in enumerate(processed) if p['username'].lower() == search_q), "?")
-            spotlight = {"username": res[0]['username'], "pos": pos, "region": res[0].get('region', 'NA')}
+    return render_template_string(HTML_TEMPLATE, players=processed, search_query=search_q, all_modes=MODES, all_regions=REGIONS, current_mode=mode_f, current_region=region_f)
 
-    return render_template_string(HTML_TEMPLATE, 
-        players=processed, 
-        spotlight=spotlight, 
-        search_query=search_q, 
-        all_modes=MODES, 
-        all_regions=REGIONS,
-        current_mode=mode_f, 
-        current_region=region_f,
-        invite_link=DISCORD_INVITE
-    )
-
-def run_bot():
-    asyncio.set_event_loop(asyncio.new_event_loop())
-    bot.run(TOKEN)
+def run_flask():
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
 
 if __name__ == '__main__':
-    threading.Thread(target=run_bot, daemon=True).start()
-    app.run(host='0.0.0.0', port=5000)
+    threading.Thread(target=run_flask, daemon=True).start()
+    bot.run(TOKEN)
