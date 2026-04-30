@@ -7,7 +7,7 @@ import threading
 import datetime
 
 # --- CONFIGURATION ---
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
 
@@ -19,20 +19,15 @@ settings_col = db_mongo['settings']
 # --- DATA MAPS ---
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
 REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
-# Higher index = Better Tier
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 
 # --- LOGIC HELPERS ---
 
 def get_global_rank_name(tier_list):
-    """Determines Global Rank based on tier density and quality."""
     if not tier_list: return "Stone"
-    
-    # Convert tiers to numerical weights
     weights = [TIER_ORDER.index(t) for t in tier_list if t in TIER_ORDER]
     top_tier = max(weights) if weights else -1
     count = len(weights)
-
     if top_tier >= 9 and count >= 3: return "Grandmaster"
     if top_tier >= 8: return "Master"
     if top_tier >= 6: return "Elite"
@@ -52,7 +47,6 @@ class MagmaBot(discord.Client):
         intents.members = True 
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
-
     async def setup_hook(self):
         await self.tree.sync()
 
@@ -62,73 +56,34 @@ bot = MagmaBot()
 async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Updates", duration: str = "1 hour"):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-    
-    settings_col.update_one(
-        {"_id": "maintenance_mode"}, 
-        {"$set": {"active": active, "reason": reason, "duration": duration}}, 
-        upsert=True
-    )
-    status = "ENABLED" if active else "DISABLED"
-    await interaction.response.send_message(f"🛠️ Maintenance is now **{status}**.")
+    settings_col.update_one({"_id": "maintenance_mode"}, {"$set": {"active": active, "reason": reason, "duration": duration}}, upsert=True)
+    await interaction.response.send_message(f"🛠️ Maintenance is now {'ENABLED' if active else 'DISABLED'}.")
 
 @bot.tree.command(name="rank", description="Update a player's tier")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
-async def rank(
-    interaction: discord.Interaction, 
-    player: str, 
-    discord_user: discord.Member, 
-    mode: app_commands.Choice[str], 
-    tier: str, 
-    region: app_commands.Choice[str],
-    reason: str = "Performance in matches"
-):
+async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str], reason: str = "Performance"):
     if get_maintenance_status()['active']:
-        return await interaction.callback.send_message("🛠️ System is in maintenance.", ephemeral=True)
+        return await interaction.response.send_message("🛠️ System in maintenance.", ephemeral=True)
     
     tier_upper = tier.upper().strip()
-    if tier_upper not in TIER_ORDER:
-        return await interaction.response.send_message(f"Invalid Tier. Valid: {', '.join(TIER_ORDER)}", ephemeral=True)
-
-    # Database logic
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {"tier": tier_upper, "region": region.value, "retired": False, "last_updated": datetime.datetime.utcnow()}},
         upsert=True
     )
 
-    # Log Formatting
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
-        embed = discord.Embed(
-            title="Tier Update",
-            description=(
-                f"**{player}** -- {discord_user.name}\n"
-                f"**User:** {discord_user.mention}\n"
-                f"**Kit:** {mode.value}\n"
-                f"**Promoted to {tier_upper}**\n"
-                f"**Reason:** {reason}\n\n"
-                f"**Tester:** {interaction.user.display_name} | **Region:** {region.value}"
-            ),
-            color=0xff4500,
-            timestamp=datetime.datetime.utcnow()
-        )
+        embed = discord.Embed(title="Tier Update", color=0xff4500, timestamp=datetime.datetime.utcnow())
+        embed.description = (f"**{player}** -- {discord_user.name}\n**User:** {discord_user.mention}\n"
+                             f"**Kit:** {mode.value}\n**Promoted to {tier_upper}**\n**Reason:** {reason}\n\n"
+                             f"**Tester:** {interaction.user.display_name} | **Region:** {region.value}")
         embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
         await log_chan.send(embed=embed)
-
-    await interaction.response.send_message(f"✅ Updated {player} to {tier_upper}.", ephemeral=True)
-
-@bot.tree.command(name="match", description="Record silent activity")
-@app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
-async def match(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str]):
-    players_col.update_one(
-        {"username": player, "gamemode": mode.value},
-        {"$set": {"last_updated": datetime.datetime.utcnow(), "retired": False}},
-        upsert=True
-    )
-    await interaction.response.send_message(f"✅ Activity logged for {player}.", ephemeral=True)
+    await interaction.response.send_message(f"✅ Updated {player}.", ephemeral=True)
 
 # --- WEB UI ---
 
@@ -149,10 +104,18 @@ HTML_TEMPLATE = """
         .sub-nav { display: flex; justify-content:center; gap: 8px; padding: 10px; background: #0f1117; border-bottom: 1px solid var(--border); overflow-x: auto; }
         .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 11px; transition: 0.2s; white-space: nowrap; }
         .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
-        .rank-badge { font-size: 10px; padding: 2px 8px; border: 1px solid var(--accent); border-radius: 5px; margin-left: 10px; color: var(--accent); font-weight: 800; text-transform: uppercase; }
         .wrapper { max-width: 900px; margin: auto; padding: 30px 20px; }
-        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 18px 25px; margin-bottom: 12px; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
-        .NA { color: #ff6b6b; } .EU { color: #51cf66; } .ASIA { color: #fcc419; } .AF { color: #ff922b; } .OC { color: #339af0; } .SA { color: #ae3ec9; }
+        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 18px 25px; margin-bottom: 12px; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; }
+        
+        /* Modal Profile System */
+        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:1001; display:flex; justify-content:center; align-items:center; backdrop-filter: blur(8px); }
+        .profile-modal { background: #11141c; width: 420px; border-radius: 24px; border: 2px solid #2d3647; padding: 40px; position: relative; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
+        .close-btn { position: absolute; top: 20px; right: 25px; color: var(--dim); text-decoration: none; font-size: 30px; font-weight: 800; }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 25px; max-height: 300px; overflow-y: auto; padding-right: 5px; }
+        .stat-item { background: #1a1d26; padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
+        
+        .rank-badge { font-size: 10px; padding: 2px 8px; border: 1px solid var(--accent); border-radius: 5px; margin-left: 10px; color: var(--accent); font-weight: 800; text-transform: uppercase; }
+        .NA { color: #ff6b6b; } .EU { color: #51cf66; } .ASIA { color: #fcc419; }
     </style>
 </head>
 <body>
@@ -164,9 +127,29 @@ HTML_TEMPLATE = """
         <a href="/" class="mode-btn {% if not current_mode %}active{% endif %}">GLOBAL</a>
         {% for m in all_modes %}<a href="/?mode={{m}}" class="mode-btn {% if current_mode == m %}active{% endif %}">{{m|upper}}</a>{% endfor %}
     </div>
+
+    {% if spotlight %}
+    <div class="modal-overlay">
+        <div class="profile-modal">
+            <a href="/" class="close-btn">&times;</a>
+            <img src="https://minotar.net/helm/{{spotlight.username}}/100.png" style="width:100px; border-radius:20px; border:3px solid var(--accent); margin-bottom:15px;">
+            <h1 style="margin:0;">{{ spotlight.username }}</h1>
+            <div style="margin-top:5px;"><span class="rank-badge" style="margin:0; font-size:14px; padding:4px 12px;">{{ spotlight.rank_name }}</span></div>
+            <div class="stat-grid">
+                {% for s in spotlight.all_stats %}
+                <div class="stat-item">
+                    <small style="color:var(--dim); text-transform:uppercase; font-size:10px;">{{ s.gamemode }}</small><br>
+                    <b style="color:white; font-size:16px;">{{ s.tier }}</b>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <div class="wrapper">
         {% for p in players %}
-        <a href="/?search={{p.username}}" class="player-row">
+        <a href="/?search={{p.username}}{% if current_mode %}&mode={{current_mode}}{% endif %}" class="player-row">
             <div style="font-weight:800; color:var(--accent);">#{{ loop.index }}</div>
             <img src="https://minotar.net/helm/{{p.username}}/40.png" style="border-radius:8px;">
             <div><b>{{ p.username }}</b> <span class="rank-badge">{{ p.rank_name }}</span></div>
@@ -180,10 +163,10 @@ HTML_TEMPLATE = """
 """
 
 @app.before_request
-def check_maintenance():
+def check_maint():
     m = get_maintenance_status()
     if m['active']:
-        return f"<body style='background:#0b0c10;color:white;text-align:center;padding-top:100px;font-family:sans-serif;'><h1>🛠️ Under Maintenance</h1><p>{m['reason']}</p><p>Est: {m['duration']}</p></body>", 503
+        return f"<body style='background:#0b0c10;color:white;text-align:center;padding-top:100px;font-family:Fredoka,sans-serif;'><h1>🛠️ Maintenance Mode</h1><p>{m['reason']}</p><p>Duration: {m['duration']}</p></body>", 503
 
 @app.route('/')
 def index():
@@ -192,39 +175,32 @@ def index():
     
     raw_data = list(players_col.find({"retired": {"$ne": True}}))
     user_map = {}
-
-    # Aggregate user data
     for d in raw_data:
         u = d['username']
-        if u not in user_map:
-            user_map[u] = {"username": u, "tiers": [], "region": d.get('region', 'NA'), "best_tier": "LT5"}
-        
+        if u not in user_map: user_map[u] = {"username": u, "tiers": [], "region": d.get('region', 'NA'), "best_tier": "LT5"}
         user_map[u]["tiers"].append(d['tier'])
-        if TIER_ORDER.index(d['tier']) > TIER_ORDER.index(user_map[u]["best_tier"]):
-            user_map[u]["best_tier"] = d['tier']
+        if TIER_ORDER.index(d['tier']) > TIER_ORDER.index(user_map[u]["best_tier"]): user_map[u]["best_tier"] = d['tier']
 
     processed = []
     for u, data in user_map.items():
-        rank_name = get_global_rank_name(data["tiers"])
-        
+        rn = get_global_rank_name(data["tiers"])
         if mode_f:
-            # Filter for specific mode
-            mode_entry = next((item for item in raw_data if item['username'] == u and item['gamemode'].lower() == mode_f), None)
-            if mode_entry:
-                processed.append({"username": u, "tier": mode_entry['tier'], "region": data['region'], "rank_name": rank_name})
+            me = next((item for item in raw_data if item['username'] == u and item['gamemode'].lower() == mode_f), None)
+            if me: processed.append({"username": u, "tier": me['tier'], "region": data['region'], "rank_name": rn})
         else:
-            # Global view: Best Tier + Rank Name
-            processed.append({"username": u, "tier": data["best_tier"], "region": data['region'], "rank_name": rank_name})
-
-    if search_q:
-        processed = [p for p in processed if search_q in p['username'].lower()]
+            processed.append({"username": u, "tier": data["best_tier"], "region": data['region'], "rank_name": rn})
 
     processed = sorted(processed, key=lambda x: TIER_ORDER.index(x['tier']), reverse=True)
+    
+    spotlight = None
+    if search_q:
+        p_data = list(players_col.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}}))
+        if p_data:
+            spotlight = {"username": p_data[0]['username'], "rank_name": get_global_rank_name([x['tier'] for x in p_data]),
+                         "all_stats": [{"gamemode": d['gamemode'], "tier": d['tier']} for d in p_data]}
 
-    return render_template_string(HTML_TEMPLATE, players=processed, all_modes=MODES, current_mode=mode_f, search_query=search_q)
+    return render_template_string(HTML_TEMPLATE, players=processed, spotlight=spotlight, all_modes=MODES, current_mode=mode_f, search_query=search_q)
 
 if __name__ == '__main__':
-    # Start Web UI
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
-    # Start Discord Bot
     bot.run(TOKEN)
