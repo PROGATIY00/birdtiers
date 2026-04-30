@@ -41,7 +41,39 @@ class MagmaBot(discord.Client):
         await self.tree.sync()
 
 bot = MagmaBot()
+# --- HELPER LOGIC FOR MATCHES ---
+async def process_match(interaction, player, discord_user, mode, is_win):
+    point_change = 5 if is_win else -5
+    result_text = "Win" if is_win else "Loss"
+    
+    players_col.update_one(
+        {"username": player, "gamemode": mode},
+        {"$inc": {"points": point_change, "wins": 1 if is_win else 0, "losses": 1 if not is_win else 0},
+         "$set": {"last_updated": datetime.datetime.utcnow()}},
+        upsert=True
+    )
+    
+    p_data = players_col.find_one({"username": player, "gamemode": mode})
+    new_total = p_data.get("points", 0)
 
+    embed = discord.Embed(
+        title=f"Match Result: {mode}",
+        description=f"**{discord_user.display_name} -- {player}**\nResult: **{result_text} ({'+5' if is_win else '-5'})**\nNew Total: **{new_total} PTS**\nRank: **{get_global_rank(new_total)}**",
+        color=0x00ff00 if is_win else 0xff0000,
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
+    embed.set_footer(text=f"Tester: {interaction.user.display_name}")
+
+    # Standard Log
+    log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
+    if log_chan: await log_chan.send(embed=embed)
+    
+    # DM
+    try: await discord_user.send(f"🎮 **Match Result!** {mode}: {result_text}. Your new total is **{new_total} PTS**.")
+    except: pass
+
+    await interaction.response.send_message(f"✅ Recorded {result_text} for {player}. Total: {new_total} PTS.")
 @bot.tree.command(name="rank", description="Set a player's base tier")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
@@ -102,49 +134,19 @@ async def rank(interaction: discord.Interaction,
 
     await interaction.response.send_message(f"✅ Ranked **{player}** as {tier_upper}.")
 # --- NEW MATCH COMMAND (WINS/LOSSES) ---
-@bot.tree.command(name="match", description="Report a win or loss for a player")
-@app_commands.choices(
-    mode=[app_commands.Choice(name=m, value=m) for m in MODES],
-    result=[app_commands.Choice(name="Win (+5)", value="win"), 
-            app_commands.Choice(name="Loss (-5)", value="loss")]
-)
-async def match(interaction: discord.Interaction, 
-                player: str, 
-                discord_user: discord.Member, 
-                mode: app_commands.Choice[str], 
-                result: app_commands.Choice[str],
-                region: app_commands.Choice[str],
-                reason: str = "Match played"):
-    
+@bot.tree.command(name="win", description="Record a win for a player")
+@app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
+async def win(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str]):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
+    await process_match(interaction, player, discord_user, mode.value, True)
 
-    # Calculate point change
-    point_change = 5 if result.value == "win" else -5
-    
-    # Update DB with Win/Loss counters
-    update_query = {
-        "$inc": {
-            "points": point_change,
-            "wins": 1 if result.value == "win" else 0,
-            "losses": 1 if result.value == "loss" else 0
-        },
-        "$set": {
-            "username": player,
-            "region": region.value,
-            "gamemode": mode.value,
-            "retired": False,
-            "last_updated": datetime.datetime.utcnow()
-        }
-    }
-    
-    players_col.update_one({"username": player, "gamemode": mode.value}, update_query, upsert=True)
-    
-    # Fetch updated data for the log
-    updated_p = players_col.find_one({"username": player, "gamemode": mode.value})
-    new_total = updated_p.get("points", 0)
-    current_rank = get_global_rank(new_total)
-
+@bot.tree.command(name="loss", description="Record a loss for a player")
+@app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
+async def loss(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str]):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
+    await process_match(interaction, player, discord_user, mode.value, False)
     # --- LOGGING ---
     embed = discord.Embed(
         title=f"Match Result: {mode.value}",
