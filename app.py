@@ -42,6 +42,65 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
+@bot.tree.command(name="rank", description="Set a player's base tier")
+@app_commands.choices(
+    mode=[app_commands.Choice(name=m, value=m) for m in MODES],
+    region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
+)
+async def rank(interaction: discord.Interaction, 
+               player: str, 
+               discord_user: discord.Member, 
+               mode: app_commands.Choice[str], 
+               tier: str, 
+               region: app_commands.Choice[str], 
+               failed_tier: str = None, 
+               reason: str = "Placement"):
+    
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
+    
+    tier_upper = tier.upper().strip()
+    if tier_upper not in TIER_ORDER:
+        return await interaction.response.send_message("Invalid Tier.", ephemeral=True)
+
+    # Convert Tier to Points for the Elo system
+    starting_pts = TIER_DATA.get(tier_upper, 0)
+
+    players_col.update_one(
+        {"username": player, "gamemode": mode.value},
+        {"$set": {
+            "username": player, 
+            "gamemode": mode.value, 
+            "tier": tier_upper, 
+            "points": starting_pts,
+            "region": region.value, 
+            "retired": False, 
+            "last_updated": datetime.datetime.utcnow()
+        }},
+        upsert=True
+    )
+    
+    # Logging
+    header = f"{discord_user.display_name} -- {player} "
+    if failed_tier: header += f"Failed {failed_tier.upper()}"
+    
+    embed = discord.Embed(
+        title="Tier Placement",
+        description=f"**{header}**\nUser: {discord_user.mention}\nKit: **{mode.value}**\nTier: **{tier_upper}** ({starting_pts} PTS)\n\n**Reason:** {reason}",
+        color=0xff4500,
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
+
+    # Routing
+    chan_id = HIGH_TIER_CHANNEL_ID if tier_upper in HIGH_TIERS else LOG_CHANNEL_ID
+    if chan_id:
+        try:
+            chan = bot.get_channel(int(chan_id))
+            if chan: await chan.send(embed=embed)
+        except: pass
+
+    await interaction.response.send_message(f"✅ Ranked **{player}** as {tier_upper}.")
 # --- NEW MATCH COMMAND (WINS/LOSSES) ---
 @bot.tree.command(name="match", description="Report a win or loss for a player")
 @app_commands.choices(
