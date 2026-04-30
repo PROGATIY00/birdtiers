@@ -13,7 +13,7 @@ LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
 
 # --- DATA MAPS ---
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
-REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
+REGIONS = ["NA", "EU", "ASIA", "AF", "OC"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 TIER_DATA = {t: (i + 1) * 5 for i, t in enumerate(TIER_ORDER)}
 
@@ -128,7 +128,10 @@ def index():
     processed = sorted([{"username": u, "points": d["pts"], "tier": d["tier"], "region": d["region"], "rank_name": get_global_rank(d["pts"])} for u, d in stats.items()], key=lambda x: -x["points"])
 # --- WEB UI & API ---
 app = Flask(__name__)
-
+@app.route('/discord')
+def discord_redirect():
+    window_location = request.args.get('window_location', 'https://dsc.gg/magma')
+    return f"<script>window.location.href = '{window_location}';</script>"
 @app.route('/api/player/<username>')
 def get_player_api(username):
     # FIXED: Properly closed the dictionary and parentheses here
