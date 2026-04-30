@@ -10,15 +10,13 @@ import datetime
 TOKEN = os.getenv("DISCORD_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
-HIGH_TIER_CHANNEL_ID = os.getenv("HIGH_TIER_CHANNEL_ID") # New Variable
+HIGH_TIER_CHANNEL_ID = os.getenv("HIGH_TIER_CHANNEL_ID")
 
 # --- DATA MAPS ---
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
 REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 TIER_DATA = {t: (i + 1) * 5 for i, t in enumerate(TIER_ORDER)}
-
-# Tiers that trigger the High Tier Channel
 HIGH_TIERS = ["HT3", "LT2", "HT2", "LT1", "HT1"]
 
 client_db = MongoClient(MONGO_URI)
@@ -36,7 +34,6 @@ def get_global_rank(pts):
     if pts >= 10:  return "Bronze"
     return "Stone"
 
-# --- DISCORD BOT ---
 class MagmaBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
@@ -48,7 +45,7 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
-@bot.tree.command(name="rank", description="Update player tier with a reason")
+@bot.tree.command(name="rank", description="Update player tier with a reason and kit")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
@@ -88,9 +85,18 @@ async def rank(interaction: discord.Interaction,
     if failed_tier:
         header += f"Failed {failed_tier.upper()}"
     
+    # "Kit" added to the description format
+    log_description = (
+        f"**{header}**\n"
+        f"Kit: **{mode.value}**\n"
+        f"Promoted to **{tier_upper}**\n\n"
+        f"**Reason:** {reason}\n"
+        f"*(we count skill, not wins)*"
+    )
+    
     embed = discord.Embed(
-        title=f"Tier Update: {mode.value}",
-        description=f"**{header}**\nPromoted to **{tier_upper}**\n\n**Reason:** {reason}\n*(we count skill, not wins)*",
+        title=f"Tier Update",
+        description=log_description,
         color=0xff4500,
         timestamp=datetime.datetime.utcnow()
     )
@@ -105,19 +111,18 @@ async def rank(interaction: discord.Interaction,
                 await log_chan.send(embed=embed)
         except: pass
 
-    # 2. Send to High Tier Logs (if tier is HT3 or higher)
+    # 2. Send to High Tier Logs
     if tier_upper in HIGH_TIERS and HIGH_TIER_CHANNEL_ID:
         try:
             hi_chan = bot.get_channel(int(HIGH_TIER_CHANNEL_ID))
             if hi_chan:
-                # Optional: Add a special flair for High Tier messages
                 hi_embed = embed.copy()
-                hi_embed.title = f"🏆 HIGH TIER UPDATE: {mode.value}"
-                hi_embed.color = 0xffcc00 # Gold color for high tiers
+                hi_embed.title = f"🏆 HIGH TIER UPDATE"
+                hi_embed.color = 0xffcc00
                 await hi_chan.send(content="⭐ **New High Tier Promotion!**", embed=hi_embed)
         except: pass
 
-    await interaction.response.send_message(f"✅ Updated **{player}** ({discord_user.display_name}) to {tier_upper}.")
+    await interaction.response.send_message(f"✅ Updated **{player}** to {tier_upper} in {mode.value}.")
 
 @bot.tree.command(name="retire", description="Retire a player")
 async def retire(interaction: discord.Interaction, player: str):
