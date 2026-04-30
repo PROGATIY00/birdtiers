@@ -16,7 +16,6 @@ db_mongo = client_db['magmatiers_db']
 players_col = db_mongo['players']
 settings_col = db_mongo['settings']
 
-# --- DATA MAPS ---
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
 REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
@@ -36,64 +35,64 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
-# --- DISCORD COMMANDS ---
-
-@bot.tree.command(name="maintenance", description="Toggle maintenance mode")
-async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Updates", duration: str = "1 hour"):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-    settings_col.update_one({"_id": "maintenance_mode"}, {"$set": {"active": active, "reason": reason, "duration": duration}}, upsert=True)
-    await interaction.response.send_message(f"🛠️ Maintenance is now {'ENABLED' if active else 'DISABLED'}.")
-
-@bot.tree.command(name="rank", description="Update a player's tier (Sends to Logs)")
+@bot.tree.command(name="rank", description="Promote/Demote a player")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
-async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str]):
+async def rank(
+    interaction: discord.Interaction, 
+    player: str, 
+    discord_user: discord.Member, 
+    mode: app_commands.Choice[str], 
+    tier: str, 
+    region: app_commands.Choice[str],
+    reason: str = "Performance in matches"
+):
     if get_maintenance_status()['active']:
         return await interaction.response.send_message("🛠️ Bot is in maintenance.", ephemeral=True)
     
     tier_upper = tier.upper().strip()
     if tier_upper not in TIER_ORDER:
-        return await interaction.response.send_message(f"Invalid Tier.", ephemeral=True)
+        return await interaction.response.send_message("Invalid Tier.", ephemeral=True)
 
-    # Database Update
+    # Update Database
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {"tier": tier_upper, "region": region.value, "retired": False, "last_updated": datetime.datetime.utcnow()}},
         upsert=True
     )
 
-    # LOGGING: Rank updates DO send to logs
+    # Log Formatting
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
         embed = discord.Embed(
             title="Tier Update",
-            description=f"**{player}** ({discord_user.display_name})\nMode: **{mode.value}**\nNew Tier: **{tier_upper}**\nRegion: **{region.value}**",
+            description=(
+                f"**{player}** -- {discord_user.name}\n"
+                f"**User:** {discord_user.mention}\n"
+                f"**Kit:** {mode.value}\n"
+                f"**Promoted to {tier_upper}**\n"
+                f"**Reason:** {reason}\n\n"
+                f"**Tester:** {interaction.user.display_name} | **Region:** {region.value}"
+            ),
             color=0xff4500,
             timestamp=datetime.datetime.utcnow()
         )
         embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
         await log_chan.send(embed=embed)
 
-    await interaction.response.send_message(f"✅ Updated **{player}** to **{tier_upper}**.")
+    await interaction.response.send_message(f"✅ Rank updated for {player}.", ephemeral=True)
 
-@bot.tree.command(name="match", description="Record activity (Does NOT send to logs)")
+@bot.tree.command(name="match", description="Record activity (Silent)")
 @app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
 async def match(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str]):
-    if get_maintenance_status()['active']:
-        return await interaction.response.send_message("🛠️ Bot is in maintenance.", ephemeral=True)
-
-    # Database Update (Tracking activity only)
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {"last_updated": datetime.datetime.utcnow(), "retired": False}},
         upsert=True
     )
-
-    # No log channel message here
-    await interaction.response.send_message(f"✅ Match recorded for **{player}** in **{mode.value}**.", ephemeral=True)
+    await interaction.response.send_message(f"✅ Activity logged.", ephemeral=True)
 # --- WEB UI ---
 app = Flask(__name__)
 
