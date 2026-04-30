@@ -5,16 +5,27 @@ from pymongo import MongoClient
 import os
 import threading
 import datetime
+import sys
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION & SAFETY CHECK ---
 TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
 
-client_db = MongoClient(MONGO_URI)
-db_mongo = client_db['magmatiers_db']
-players_col = db_mongo['players']
-settings_col = db_mongo['settings']
+if not TOKEN or not MONGO_URI or not LOG_CHANNEL_ID:
+    print("❌ CRITICAL ERROR: Missing environment variables (TOKEN, MONGO_URI, or LOG_CHANNEL_ID).")
+    print("Please add them in the Render Dashboard under the 'Environment' tab.")
+    sys.exit(1)
+
+# --- DATABASE SETUP ---
+try:
+    client_db = MongoClient(MONGO_URI)
+    db_mongo = client_db['magmatiers_db']
+    players_col = db_mongo['players']
+    settings_col = db_mongo['settings']
+except Exception as e:
+    print(f"❌ DATABASE ERROR: {e}")
+    sys.exit(1)
 
 # --- DATA MAPS ---
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
@@ -67,16 +78,17 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         return await interaction.response.send_message("🛠️ System in maintenance.", ephemeral=True)
     
     tier_upper = tier.upper().strip()
-    
-    # Logic to determine if promoted or demoted
+    if tier_upper not in TIER_ORDER:
+        return await interaction.response.send_message("Invalid Tier.", ephemeral=True)
+
+    # Calculate Promotion vs Demotion
     old_data = players_col.find_one({"username": player, "gamemode": mode.value})
-    action = "updated"
+    action = "promoted"
     if old_data and "tier" in old_data:
         old_idx = TIER_ORDER.index(old_data['tier'])
         new_idx = TIER_ORDER.index(tier_upper)
-        action = "promoted" if new_idx > old_idx else "demoted" if new_idx < old_idx else "updated"
-    else:
-        action = "promoted"
+        if new_idx < old_idx: action = "demoted"
+        elif new_idx == old_idx: action = "updated"
 
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
@@ -87,18 +99,29 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
         embed = discord.Embed(title="Tier Update", color=0xff4500, timestamp=datetime.datetime.utcnow())
-        # The specific message format you requested:
-        msg = f"**{player}** has been **{action}** to **{tier_upper}** in **{mode.value}**"
+        # The specific message format you requested
+        msg_title = f"**{player}** has been **{action}** to **{tier_upper}** in **{mode.value}**"
         
         embed.description = (
-            f"{msg}\n\n"
+            f"{msg_title}\n\n"
             f"**User:** {discord_user.mention} -- {discord_user.name}\n"
             f"**Reason:** {reason}\n\n"
             f"**Tester:** {interaction.user.display_name} | **Region:** {region.value}"
         )
         embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
         await log_chan.send(embed=embed)
+    
     await interaction.response.send_message(f"✅ {player} {action} to {tier_upper}.", ephemeral=True)
+
+@bot.tree.command(name="match", description="Record silent activity")
+@app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
+async def match(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str]):
+    players_col.update_one(
+        {"username": player, "gamemode": mode.value},
+        {"$set": {"last_updated": datetime.datetime.utcnow(), "retired": False}},
+        upsert=True
+    )
+    await interaction.response.send_message(f"✅ Activity logged.", ephemeral=True)
 
 # --- WEB UI ---
 
@@ -120,8 +143,8 @@ HTML_TEMPLATE = """
         .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 11px; transition: 0.2s; white-space: nowrap; }
         .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
         .wrapper { max-width: 900px; margin: auto; padding: 30px 20px; }
-        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 18px 25px; margin-bottom: 12px; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
-        .player-row:hover { border-color: var(--accent); transform: scale(1.01); }
+        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 18px 25px; margin-bottom: 12px; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; cursor: pointer; }
+        .player-row:hover { border-color: var(--accent); transform: translateY(-2px); }
         
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:1001; display:flex; justify-content:center; align-items:center; backdrop-filter: blur(8px); }
         .profile-modal { background: #11141c; width: 420px; border-radius: 24px; border: 2px solid #2d3647; padding: 40px; position: relative; text-align: center; }
@@ -130,13 +153,13 @@ HTML_TEMPLATE = """
         .stat-item { background: #1a1d26; padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
         
         .rank-badge { font-size: 10px; padding: 2px 8px; border: 1px solid var(--accent); border-radius: 5px; margin-left: 10px; color: var(--accent); font-weight: 800; text-transform: uppercase; }
-        .NA { color: #ff6b6b; } .EU { color: #51cf66; } .ASIA { color: #fcc419; }
+        .NA { color: #ff6b6b; } .EU { color: #51cf66; } .ASIA { color: #fcc419; } .AF { color: #ff922b; } .OC { color: #339af0; } .SA { color: #ae3ec9; }
     </style>
 </head>
 <body>
     <div class="navbar">
         <a href="/" class="logo">Magma<span>TIERS</span></a>
-        <form action="/"><input type="text" name="search" style="background:#0b0c10; border:1px solid var(--border); padding:8px 18px; border-radius:20px; color:white; outline:none;" placeholder="Search..." value="{{ search_query }}"></form>
+        <form action="/"><input type="text" name="search" style="background:#0b0c10; border:1px solid var(--border); padding:8px 18px; border-radius:20px; color:white; outline:none;" placeholder="Search player..." value="{{ search_query }}"></form>
     </div>
     <div class="sub-nav">
         <a href="/" class="mode-btn {% if not current_mode %}active{% endif %}">GLOBAL</a>
