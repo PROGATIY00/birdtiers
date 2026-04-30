@@ -48,7 +48,6 @@ bot = MagmaBot()
 # --- MATCH LOGIC ---
 async def process_match(interaction, player, discord_user, mode, is_win):
     point_change = 5 if is_win else -5
-    result_text = "Win" if is_win else "Loss"
     
     players_col.update_one(
         {"username": player, "gamemode": mode},
@@ -60,9 +59,10 @@ async def process_match(interaction, player, discord_user, mode, is_win):
     p_data = players_col.find_one({"username": player, "gamemode": mode})
     new_total = p_data.get("points", 0)
 
+    # Log embed no longer mentions "Win" or "Loss"
     embed = discord.Embed(
-        title=f"Match Result: {mode}",
-        description=f"**{discord_user.display_name} -- {player}**\nResult: **{result_text}**\nNew Total: **{new_total} PTS**",
+        title=f"ELO Update: {mode}",
+        description=f"**{player}** ({discord_user.display_name})\nAdjustment: **{'+5' if is_win else '-5'} PTS**\nNew Total: **{new_total} PTS**",
         color=0x00ff00 if is_win else 0xff0000,
         timestamp=datetime.datetime.utcnow()
     )
@@ -70,7 +70,7 @@ async def process_match(interaction, player, discord_user, mode, is_win):
     
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan: await log_chan.send(embed=embed)
-    await interaction.response.send_message(f"✅ Recorded {result_text} for {player}.")
+    await interaction.response.send_message(f"✅ Points updated for {player}. New Total: {new_total} PTS.")
 
 # --- DISCORD COMMANDS ---
 @bot.tree.command(name="rank")
@@ -103,6 +103,7 @@ async def loss(interaction: discord.Interaction, player: str, discord_user: disc
 
 # --- WEB UI ---
 app = Flask(__name__)
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -119,13 +120,8 @@ HTML_TEMPLATE = """
         .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 11px; transition: 0.2s; white-space: nowrap; }
         .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
         
-        /* REGION COLORS */
-        .NA { color: #ff6b6b; }
-        .EU { color: #51cf66; }
-        .ASIA { color: #fcc419; }
-        .AF { color: #ff922b; }
-        .OC { color: #339af0; }
-        .SA { color: #ae3ec9; }
+        .NA { color: #ff6b6b; } .EU { color: #51cf66; } .ASIA { color: #fcc419; }
+        .AF { color: #ff922b; } .OC { color: #339af0; } .SA { color: #ae3ec9; }
 
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:1001; display:flex; justify-content:center; align-items:center; backdrop-filter: blur(10px); }
         .profile-modal { background: #11141c; width: 420px; border-radius: 24px; border: 2px solid #2d3647; padding: 40px; position: relative; text-align: center; }
@@ -209,14 +205,12 @@ def index():
             if gm.lower() == mode_f:
                 stats[u]["pts"] = pts
                 stats[u]["tier"] = t
-            elif u not in stats or stats[u]["pts"] == 0:
-                stats[u]["pts"] = -1 # Filtered out
         else:
             stats[u]["pts"] += pts
 
     processed = []
     for u, d in stats.items():
-        if d["pts"] >= 0:
+        if (mode_f and mode_f in d["modes_active"]) or (not mode_f and d["pts"] > 0):
             processed.append({
                 "username": u, "points": d["pts"], "tier": d["tier"], 
                 "region": d["region"], "rank_name": get_global_rank(d["pts"])
@@ -230,6 +224,7 @@ def index():
         if p_data:
             spotlight = {
                 "username": p_data[0]['username'],
+                "region": p_data[0].get('region', 'NA'),
                 "all_stats": [{"gamemode": d['gamemode'], "tier": d.get('tier', 'LT5')} for d in p_data]
             }
 
