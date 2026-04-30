@@ -103,7 +103,6 @@ async def loss(interaction: discord.Interaction, player: str, discord_user: disc
 
 # --- WEB UI ---
 app = Flask(__name__)
-
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -119,15 +118,26 @@ HTML_TEMPLATE = """
         .sub-nav { display: flex; justify-content:center; gap: 8px; padding: 10px; background: #0f1117; border-bottom: 1px solid var(--border); overflow-x: auto; }
         .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 11px; transition: 0.2s; white-space: nowrap; }
         .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
+        
+        /* REGION COLORS */
+        .NA { color: #ff6b6b; }
+        .EU { color: #51cf66; }
+        .ASIA { color: #fcc419; }
+        .AF { color: #ff922b; }
+        .OC { color: #339af0; }
+        .SA { color: #ae3ec9; }
+
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:1001; display:flex; justify-content:center; align-items:center; backdrop-filter: blur(10px); }
         .profile-modal { background: #11141c; width: 420px; border-radius: 24px; border: 2px solid #2d3647; padding: 40px; position: relative; text-align: center; }
         .close-btn { position: absolute; top: 20px; right: 25px; color: var(--dim); text-decoration: none; font-size: 30px; }
+        
         .insane-row { position: relative; background: var(--card) !important; z-index: 1; }
         .insane-row::before { content: ''; position: absolute; inset: -2px; z-index: -1; background: conic-gradient(from var(--angle), transparent 70%, #ff4500, #ff8c00, #ff4500); animation: rotate 2s linear infinite; border-radius: 17px; }
         @property --angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
         @keyframes rotate { to { --angle: 360deg; } }
+        
         .wrapper { max-width: 950px; margin: auto; padding: 30px 20px; }
-        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 18px 25px; margin-bottom: 12px; display: grid; grid-template-columns: 50px 60px 1fr 100px 120px; align-items: center; text-decoration: none; color: inherit; }
+        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 18px 25px; margin-bottom: 12px; display: grid; grid-template-columns: 50px 60px 1fr 100px 120px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
         .rank-badge { font-size: 10px; padding: 2px 8px; border: 1px solid var(--accent); border-radius: 5px; margin-left: 12px; color: var(--accent); font-weight: 800; }
     </style>
 </head>
@@ -148,10 +158,11 @@ HTML_TEMPLATE = """
             <a href="/" class="close-btn">&times;</a>
             <img src="https://minotar.net/helm/{{spotlight.username}}/100.png" style="width:100px; border-radius:15px; border:3px solid var(--accent);">
             <h1>{{ spotlight.username }}</h1>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <p class="{{ spotlight.region }}" style="font-weight:800;">{{ spotlight.region }}</p>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:20px;">
                 {% for s in spotlight.all_stats %}
                 <div style="background:#1a1d26; padding:10px; border-radius:10px; border:1px solid var(--border);">
-                    <small>{{ s.gamemode }}</small><br><b style="color:var(--accent);">{{ s.tier }}</b>
+                    <small style="text-transform:uppercase;">{{ s.gamemode }}</small><br><b style="color:var(--accent);">{{ s.tier }}</b>
                 </div>
                 {% endfor %}
             </div>
@@ -165,7 +176,7 @@ HTML_TEMPLATE = """
             <div style="font-weight:800; color:var(--accent);">#{{ loop.index }}</div>
             <img src="https://minotar.net/helm/{{p.username}}/40.png" style="border-radius:8px;">
             <div><b>{{ p.username }}</b> <span class="rank-badge">{{ p.rank_name }}</span></div>
-            <div style="font-size:12px; color:var(--dim);">{{ p.region }}</div>
+            <div class="{{ p.region }}" style="font-weight:800; font-size:12px;">{{ p.region }}</div>
             <div style="text-align:right; font-weight:800; color:#ffcc00;">{{ p.points }} PTS</div>
         </a>
         {% endfor %}
