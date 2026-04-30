@@ -17,7 +17,6 @@ REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 TIER_DATA = {t: (i + 1) * 5 for i, t in enumerate(TIER_ORDER)}
 
-# --- DB SETUP ---
 client_db = MongoClient(MONGO_URI)
 db_mongo = client_db['magmatiers_db']
 players_col = db_mongo['players']
@@ -44,12 +43,19 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
-@bot.tree.command(name="rank", description="Update player tier")
+@bot.tree.command(name="rank", description="Update player tier with a reason")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
-async def rank(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str]):
+async def rank(interaction: discord.Interaction, 
+               player: str, 
+               mode: app_commands.Choice[str], 
+               tier: str, 
+               region: app_commands.Choice[str], 
+               failed_tier: str = None, 
+               reason: str = "No reason provided"):
+    
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
     
@@ -70,27 +76,50 @@ async def rank(interaction: discord.Interaction, player: str, mode: app_commands
         upsert=True
     )
     
-    # Logging Logic
+    # --- LOGGING WITH NEW FORMAT ---
     if LOG_CHANNEL_ID:
         try:
             chan = bot.get_channel(int(LOG_CHANNEL_ID))
             if chan:
-                embed = discord.Embed(title="📈 Tier Update", color=0xff4500, timestamp=datetime.datetime.utcnow())
-                embed.description = f"**{player}** updated to **{tier_upper}** in **{mode.value}**"
+                # Format: @Staff -- Player Failed [Tier] / Promoted to [Tier]
+                header = f"{interaction.user.mention} -- {player} "
+                if failed_tier:
+                    header += f"Failed {failed_tier.upper()}"
+                
+                embed = discord.Embed(
+                    title=f"Tier Update: {mode.value}",
+                    description=f"{header}\n**Promoted to {tier_upper}**\n\n**Reason:** {reason}\n*(we count skill, not wins)*",
+                    color=0xff4500,
+                    timestamp=datetime.datetime.utcnow()
+                )
                 embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-                await chan.send(embed=embed)
+                embed.set_footer(text=f"Region: {region.value}")
+                await chan.send(content=interaction.user.mention, embed=embed)
         except: pass
 
-    await interaction.response.send_message(f"✅ Updated **{player}**.")
+    await interaction.response.send_message(f"✅ Updated **{player}** to {tier_upper}.")
 
 @bot.tree.command(name="retire", description="Retire a player")
 async def retire(interaction: discord.Interaction, player: str):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
-    
     players_col.update_many({"username": {"$regex": f"^{player}$", "$options": "i"}}, {"$set": {"retired": True}})
     await interaction.response.send_message(f"💀 Retired **{player}**.")
 
+# --- WEB UI ---
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    raw_players = list(players_col.find({"retired": {"$ne": True}}))
+    stats = {}
+    for p in raw_players:
+        u, t, reg = p['username'], p['tier'], p.get('region', 'NA')
+        val = TIER_DATA.get(t, 0)
+        if u not in stats: stats[u] = {"pts": 0, "tier": t, "region": reg}
+        stats[u]["pts"] += val
+    
+    processed = sorted([{"username": u, "points": d["pts"], "tier": d["tier"], "region": d["region"], "rank_name": get_global_rank(d["pts"])} for u, d in stats.items()], key=lambda x: -x["points"])
 # --- WEB UI & API ---
 app = Flask(__name__)
 
