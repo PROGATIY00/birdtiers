@@ -15,9 +15,6 @@ HIGH_TIER_CHANNEL_ID = os.getenv("HIGH_TIER_CHANNEL_ID")
 # --- DATA MAPS ---
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
 REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
-TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
-TIER_DATA = {t: (i + 1) * 5 for i, t in enumerate(TIER_ORDER)}
-HIGH_TIERS = ["HT3", "LT2", "HT2", "LT1", "HT1"]
 
 client_db = MongoClient(MONGO_URI)
 db_mongo = client_db['magmatiers_db']
@@ -45,98 +42,74 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
-@bot.tree.command(name="rank", description="Update tier and send to the correct channel")
+# --- NEW MATCH COMMAND (WINS/LOSSES) ---
+@bot.tree.command(name="match", description="Report a win or loss for a player")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
-    region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
+    result=[app_commands.Choice(name="Win (+5)", value="win"), 
+            app_commands.Choice(name="Loss (-5)", value="loss")]
 )
-async def rank(interaction: discord.Interaction, 
-               player: str, 
-               discord_user: discord.Member, 
-               mode: app_commands.Choice[str], 
-               tier: str, 
-               region: app_commands.Choice[str], 
-               failed_tier: str = None, 
-               reason: str = "No reason provided"):
+async def match(interaction: discord.Interaction, 
+                player: str, 
+                discord_user: discord.Member, 
+                mode: app_commands.Choice[str], 
+                result: app_commands.Choice[str],
+                region: app_commands.Choice[str],
+                reason: str = "Match played"):
     
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
-    
-    tier_upper = tier.upper().strip()
-    if tier_upper not in TIER_ORDER:
-        return await interaction.response.send_message("Invalid Tier.", ephemeral=True)
 
-    players_col.update_one(
-        {"username": player, "gamemode": mode.value},
-        {"$set": {
-            "username": player, 
-            "gamemode": mode.value, 
-            "tier": tier_upper, 
-            "region": region.value, 
-            "retired": False, 
+    # Calculate point change
+    point_change = 5 if result.value == "win" else -5
+    
+    # Update DB with Win/Loss counters
+    update_query = {
+        "$inc": {
+            "points": point_change,
+            "wins": 1 if result.value == "win" else 0,
+            "losses": 1 if result.value == "loss" else 0
+        },
+        "$set": {
+            "username": player,
+            "region": region.value,
+            "gamemode": mode.value,
+            "retired": False,
             "last_updated": datetime.datetime.utcnow()
-        }},
-        upsert=True
-    )
+        }
+    }
     
-    # --- LOGGING PREP ---
-    discord_name = discord_user.display_name
-    header = f"{discord_name} -- {player} "
-    if failed_tier:
-        header += f"Failed {failed_tier.upper()}"
+    players_col.update_one({"username": player, "gamemode": mode.value}, update_query, upsert=True)
     
-    log_description = (
-        f"**{header}**\n"
-        f"User: {discord_user.mention}\n"
-        f"Kit: **{mode.value}**\n"
-        f"Promoted to **{tier_upper}**\n\n"
-        f"**Reason:** {reason}\n"
-        f"*(we count skill, not wins)*"
-    )
-    
+    # Fetch updated data for the log
+    updated_p = players_col.find_one({"username": player, "gamemode": mode.value})
+    new_total = updated_p.get("points", 0)
+    current_rank = get_global_rank(new_total)
+
+    # --- LOGGING ---
     embed = discord.Embed(
-        title="Tier Update",
-        description=log_description,
-        color=0xff4500,
+        title=f"Match Result: {mode.value}",
+        description=f"**{discord_user.display_name} -- {player}**\nResult: **{result.name}**\nNew Total: **{new_total} PTS**\nRank: **{current_rank}**\n\n**Note:** {reason}",
+        color=0x00ff00 if result.value == "win" else 0xff0000,
         timestamp=datetime.datetime.utcnow()
     )
     embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-    embed.set_footer(text=f"Tester: {interaction.user.display_name} | Region: {region.value}")
+    embed.set_footer(text=f"Tester: {interaction.user.display_name}")
 
-    # --- CHANNEL ROUTING LOGIC ---
-    # If high tier, send ONLY to high tier channel. Otherwise, send ONLY to standard log.
-    if tier_upper in HIGH_TIERS and HIGH_TIER_CHANNEL_ID:
+    # Routing
+    target_chan_id = HIGH_TIER_CHANNEL_ID if new_total >= 75 else LOG_CHANNEL_ID
+    if target_chan_id:
         try:
-            hi_chan = bot.get_channel(int(HIGH_TIER_CHANNEL_ID))
-            if hi_chan:
-                embed.title = "🏆 HIGH TIER UPDATE"
-                embed.color = 0xffcc00
-                await hi_chan.send(content=f"⭐ **New High Tier Promotion!** {discord_user.mention}", embed=embed)
-        except: pass
-    elif LOG_CHANNEL_ID:
-        try:
-            log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
-            if log_chan:
-                await log_chan.send(embed=embed)
+            chan = bot.get_channel(int(target_chan_id))
+            if chan: await chan.send(embed=embed)
         except: pass
 
-    # --- DM THE USER ---
+    # DM User
     try:
-        dm_embed = discord.Embed(
-            title="🔥 MagmaTIERS Update",
-            description=f"Your tier has been updated in **{mode.value}**!",
-            color=0xff4500
-        )
-        dm_embed.add_field(name="New Tier", value=tier_upper, inline=True)
-        dm_embed.add_field(name="Region", value=region.value, inline=True)
-        dm_embed.add_field(name="Reason", value=reason, inline=False)
-        dm_embed.set_footer(text="Keep grinding! We count skill, not wins.")
-        await discord_user.send(embed=dm_embed)
-        dm_status = "and DM'd"
-    except:
-        dm_status = "but DM failed"
+        await discord_user.send(f"🎮 **Match Recorded!**\nYou gained {point_change} points in **{mode.value}**. Your new total is **{new_total}**.")
+    except: pass
 
-    await interaction.response.send_message(f"✅ Updated **{player}** to {tier_upper} {dm_status}.")
+    await interaction.response.send_message(f"✅ Recorded {result.value} for {player}. Total: {new_total} PTS.")
 
 @bot.tree.command(name="retire", description="Retire a player")
 async def retire(interaction: discord.Interaction, player: str):
