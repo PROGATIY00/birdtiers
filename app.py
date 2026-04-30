@@ -45,7 +45,7 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
-@bot.tree.command(name="rank", description="Update tier, mention user, and send DM")
+@bot.tree.command(name="rank", description="Update tier and send to the correct channel")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
@@ -79,13 +79,12 @@ async def rank(interaction: discord.Interaction,
         upsert=True
     )
     
-    # --- LOGGING LOGIC ---
+    # --- LOGGING PREP ---
     discord_name = discord_user.display_name
     header = f"{discord_name} -- {player} "
     if failed_tier:
         header += f"Failed {failed_tier.upper()}"
     
-    # Mentioned the user inside the description using their mention ID
     log_description = (
         f"**{header}**\n"
         f"User: {discord_user.mention}\n"
@@ -96,7 +95,7 @@ async def rank(interaction: discord.Interaction,
     )
     
     embed = discord.Embed(
-        title=f"Tier Update",
+        title="Tier Update",
         description=log_description,
         color=0xff4500,
         timestamp=datetime.datetime.utcnow()
@@ -104,26 +103,24 @@ async def rank(interaction: discord.Interaction,
     embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
     embed.set_footer(text=f"Tester: {interaction.user.display_name} | Region: {region.value}")
 
-    # 1. Send to Regular Logs
-    if LOG_CHANNEL_ID:
+    # --- CHANNEL ROUTING LOGIC ---
+    # If high tier, send ONLY to high tier channel. Otherwise, send ONLY to standard log.
+    if tier_upper in HIGH_TIERS and HIGH_TIER_CHANNEL_ID:
+        try:
+            hi_chan = bot.get_channel(int(HIGH_TIER_CHANNEL_ID))
+            if hi_chan:
+                embed.title = "🏆 HIGH TIER UPDATE"
+                embed.color = 0xffcc00
+                await hi_chan.send(content=f"⭐ **New High Tier Promotion!** {discord_user.mention}", embed=embed)
+        except: pass
+    elif LOG_CHANNEL_ID:
         try:
             log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
             if log_chan:
                 await log_chan.send(embed=embed)
         except: pass
 
-    # 2. Send to High Tier Logs
-    if tier_upper in HIGH_TIERS and HIGH_TIER_CHANNEL_ID:
-        try:
-            hi_chan = bot.get_channel(int(HIGH_TIER_CHANNEL_ID))
-            if hi_chan:
-                hi_embed = embed.copy()
-                hi_embed.title = f"🏆 HIGH TIER UPDATE"
-                hi_embed.color = 0xffcc00
-                await hi_chan.send(content=f"⭐ **New High Tier Promotion!** {discord_user.mention}", embed=hi_embed)
-        except: pass
-
-    # 3. DM THE USER
+    # --- DM THE USER ---
     try:
         dm_embed = discord.Embed(
             title="🔥 MagmaTIERS Update",
@@ -134,12 +131,9 @@ async def rank(interaction: discord.Interaction,
         dm_embed.add_field(name="Region", value=region.value, inline=True)
         dm_embed.add_field(name="Reason", value=reason, inline=False)
         dm_embed.set_footer(text="Keep grinding! We count skill, not wins.")
-        
         await discord_user.send(embed=dm_embed)
         dm_status = "and DM'd"
-    except discord.Forbidden:
-        dm_status = "but DM failed (DMs closed)"
-    except Exception:
+    except:
         dm_status = "but DM failed"
 
     await interaction.response.send_message(f"✅ Updated **{player}** to {tier_upper} {dm_status}.")
