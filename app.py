@@ -36,6 +36,7 @@ def get_global_rank(pts):
 class MagmaBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
+        intents.members = True # Ensure members intent is on for name fetching
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
     async def setup_hook(self):
@@ -50,6 +51,7 @@ bot = MagmaBot()
 )
 async def rank(interaction: discord.Interaction, 
                player: str, 
+               discord_user: discord.Member, # Added to get the Discord Name
                mode: app_commands.Choice[str], 
                tier: str, 
                region: app_commands.Choice[str], 
@@ -63,6 +65,7 @@ async def rank(interaction: discord.Interaction,
     if tier_upper not in TIER_ORDER:
         return await interaction.response.send_message("Invalid Tier.", ephemeral=True)
 
+    # Save Minecraft name to DB
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {
@@ -76,28 +79,32 @@ async def rank(interaction: discord.Interaction,
         upsert=True
     )
     
-    # --- LOGGING WITH NEW FORMAT ---
+    # --- LOGGING WITH DISCORD NAME ---
     if LOG_CHANNEL_ID:
         try:
             chan = bot.get_channel(int(LOG_CHANNEL_ID))
             if chan:
-                # Format: @Staff -- Player Failed [Tier] / Promoted to [Tier]
-                header = f"{interaction.user.mention} -- {player} "
+                # Uses Discord Global Name (or Display Name) instead of mention
+                discord_name = discord_user.display_name
+                header = f"{discord_name} -- {player} "
+                
                 if failed_tier:
                     header += f"Failed {failed_tier.upper()}"
                 
                 embed = discord.Embed(
                     title=f"Tier Update: {mode.value}",
-                    description=f"{header}\n**Promoted to {tier_upper}**\n\n**Reason:** {reason}\n*(we count skill, not wins)*",
+                    description=f"**{header}**\nPromoted to **{tier_upper}**\n\n**Reason:** {reason}\n*(we count skill, not wins)*",
                     color=0xff4500,
                     timestamp=datetime.datetime.utcnow()
                 )
                 embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-                embed.set_footer(text=f"Region: {region.value}")
-                await chan.send(content=interaction.user.mention, embed=embed)
-        except: pass
+                embed.set_footer(text=f"Tester: {interaction.user.display_name} | Region: {region.value}")
+                
+                await chan.send(embed=embed)
+        except Exception as e:
+            print(f"Log Error: {e}")
 
-    await interaction.response.send_message(f"✅ Updated **{player}** to {tier_upper}.")
+    await interaction.response.send_message(f"✅ Updated **{player}** ({discord_user.display_name}) to {tier_upper}.")
 
 @bot.tree.command(name="retire", description="Retire a player")
 async def retire(interaction: discord.Interaction, player: str):
@@ -105,7 +112,6 @@ async def retire(interaction: discord.Interaction, player: str):
         return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
     players_col.update_many({"username": {"$regex": f"^{player}$", "$options": "i"}}, {"$set": {"retired": True}})
     await interaction.response.send_message(f"💀 Retired **{player}**.")
-
 # --- WEB UI ---
 app = Flask(__name__)
 
