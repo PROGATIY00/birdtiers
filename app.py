@@ -45,7 +45,7 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
-@bot.tree.command(name="rank", description="Update player tier with a reason and kit")
+@bot.tree.command(name="rank", description="Update tier, mention user, and send DM")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
@@ -85,9 +85,10 @@ async def rank(interaction: discord.Interaction,
     if failed_tier:
         header += f"Failed {failed_tier.upper()}"
     
-    # "Kit" added to the description format
+    # Mentioned the user inside the description using their mention ID
     log_description = (
         f"**{header}**\n"
+        f"User: {discord_user.mention}\n"
         f"Kit: **{mode.value}**\n"
         f"Promoted to **{tier_upper}**\n\n"
         f"**Reason:** {reason}\n"
@@ -119,10 +120,29 @@ async def rank(interaction: discord.Interaction,
                 hi_embed = embed.copy()
                 hi_embed.title = f"🏆 HIGH TIER UPDATE"
                 hi_embed.color = 0xffcc00
-                await hi_chan.send(content="⭐ **New High Tier Promotion!**", embed=hi_embed)
+                await hi_chan.send(content=f"⭐ **New High Tier Promotion!** {discord_user.mention}", embed=hi_embed)
         except: pass
 
-    await interaction.response.send_message(f"✅ Updated **{player}** to {tier_upper} in {mode.value}.")
+    # 3. DM THE USER
+    try:
+        dm_embed = discord.Embed(
+            title="🔥 MagmaTIERS Update",
+            description=f"Your tier has been updated in **{mode.value}**!",
+            color=0xff4500
+        )
+        dm_embed.add_field(name="New Tier", value=tier_upper, inline=True)
+        dm_embed.add_field(name="Region", value=region.value, inline=True)
+        dm_embed.add_field(name="Reason", value=reason, inline=False)
+        dm_embed.set_footer(text="Keep grinding! We count skill, not wins.")
+        
+        await discord_user.send(embed=dm_embed)
+        dm_status = "and DM'd"
+    except discord.Forbidden:
+        dm_status = "but DM failed (DMs closed)"
+    except Exception:
+        dm_status = "but DM failed"
+
+    await interaction.response.send_message(f"✅ Updated **{player}** to {tier_upper} {dm_status}.")
 
 @bot.tree.command(name="retire", description="Retire a player")
 async def retire(interaction: discord.Interaction, player: str):
