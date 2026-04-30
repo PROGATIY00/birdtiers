@@ -19,14 +19,12 @@ settings_col = db_mongo['settings']
 # --- DATA MAPS ---
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
 REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
+# Higher index = Higher rank
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 
-# --- MAINTENANCE HELPERS ---
 def get_maintenance_status():
     status = settings_col.find_one({"_id": "maintenance_mode"})
-    if not status:
-        return {"active": False, "reason": "None", "duration": "Unknown"}
-    return status
+    return status if status else {"active": False, "reason": "None", "duration": "Unknown"}
 
 class MagmaBot(discord.Client):
     def __init__(self):
@@ -40,17 +38,11 @@ class MagmaBot(discord.Client):
 bot = MagmaBot()
 
 # --- DISCORD COMMANDS ---
-
 @bot.tree.command(name="maintenance", description="Toggle maintenance mode")
 async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Updates", duration: str = "1 hour"):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-
-    settings_col.update_one(
-        {"_id": "maintenance_mode"},
-        {"$set": {"active": active, "reason": reason, "duration": duration}},
-        upsert=True
-    )
+    settings_col.update_one({"_id": "maintenance_mode"}, {"$set": {"active": active, "reason": reason, "duration": duration}}, upsert=True)
     await interaction.response.send_message(f"🛠️ Maintenance is now {'ENABLED' if active else 'DISABLED'}.")
 
 @bot.tree.command(name="rank")
@@ -59,48 +51,22 @@ async def maintenance(interaction: discord.Interaction, active: bool, reason: st
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
 async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str]):
-    m_status = get_maintenance_status()
-    if m_status['active']:
+    if get_maintenance_status()['active']:
         return await interaction.response.send_message("🛠️ Bot is in maintenance.", ephemeral=True)
-
+    
     tier_upper = tier.upper().strip()
     if tier_upper not in TIER_ORDER:
-        return await interaction.response.send_message("Invalid Tier.", ephemeral=True)
+        return await interaction.response.send_message(f"Invalid Tier. Use: {', '.join(TIER_ORDER)}", ephemeral=True)
 
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {"tier": tier_upper, "region": region.value, "retired": False, "last_updated": datetime.datetime.utcnow()}},
         upsert=True
     )
-    await interaction.response.send_message(f"✅ Updated {player} to {tier_upper}.")
+    await interaction.response.send_message(f"✅ Updated **{player}** to **{tier_upper}** in **{mode.value}**.")
 
 # --- WEB UI ---
 app = Flask(__name__)
-
-MAINTENANCE_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Maintenance | MagmaTIERS</title>
-    <style>
-        body { background: #0b0c10; color: white; font-family: 'Fredoka', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center; }
-        .box { background: #14171f; padding: 50px; border-radius: 24px; border: 2px solid #ff4500; max-width: 500px; }
-        h1 { color: #ff4500; margin: 0; }
-        .meta { margin-top: 20px; padding: 15px; background: #0f1117; border-radius: 12px; font-size: 14px; color: #8b949e; }
-    </style>
-</head>
-<body>
-    <div class="box">
-        <h1>🛠️ MAINTENANCE</h1>
-        <p>We are currently updating the system.</p>
-        <div class="meta">
-            <b>REASON:</b> {{ reason }}<br>
-            <b>DURATION:</b> {{ duration }}
-        </div>
-    </div>
-</body>
-</html>
-"""
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -141,6 +107,7 @@ HTML_TEMPLATE = """
     </div>
     
     <div class="sub-nav">
+        <a href="/" class="mode-btn {% if not current_mode %}active{% endif %}">GLOBAL</a>
         {% for m in all_modes %}<a href="/?mode={{m}}" class="mode-btn {% if current_mode == m %}active{% endif %}">{{m|upper}}</a>{% endfor %}
     </div>
 
@@ -163,19 +130,15 @@ HTML_TEMPLATE = """
     {% endif %}
 
     <div class="wrapper">
-        {% if not current_mode %}
-            <div style="text-align:center; color:var(--dim); margin-top:50px;">Select a kit to view tiers.</div>
-        {% else %}
-            {% for p in players %}
-            <a href="/?search={{p.username}}&mode={{current_mode}}" class="player-row {% if p.tier in ['HT1', 'LT1'] %}insane-row{% endif %}">
-                <div style="font-weight:800; color:var(--accent);">#{{ loop.index }}</div>
-                <img src="https://minotar.net/helm/{{p.username}}/40.png" style="border-radius:8px;">
-                <div><b>{{ p.username }}</b></div>
-                <div class="{{ p.region }}" style="font-weight:800; font-size:12px;">{{ p.region }}</div>
-                <div style="text-align:right; font-weight:800; color:var(--accent); font-size:18px;">{{ p.tier }}</div>
-            </a>
-            {% endfor %}
-        {% endif %}
+        {% for p in players %}
+        <a href="/?search={{p.username}}" class="player-row {% if p.tier in ['HT1', 'LT1'] %}insane-row{% endif %}">
+            <div style="font-weight:800; color:var(--accent);">#{{ loop.index }}</div>
+            <img src="https://minotar.net/helm/{{p.username}}/40.png" style="border-radius:8px;">
+            <div><b>{{ p.username }}</b> {% if not current_mode %}<small style="color:var(--dim); margin-left:10px;">{{ p.best_kit|upper }}</small>{% endif %}</div>
+            <div class="{{ p.region }}" style="font-weight:800; font-size:12px;">{{ p.region }}</div>
+            <div style="text-align:right; font-weight:800; color:var(--accent); font-size:18px;">{{ p.tier }}</div>
+        </a>
+        {% endfor %}
     </div>
 </body>
 </html>
@@ -184,40 +147,48 @@ HTML_TEMPLATE = """
 @app.before_request
 def check_maintenance():
     m_status = get_maintenance_status()
-    if m_status['active'] and request.path != '/maintenance_css_bypass': # hidden safety
-        return render_template_string(MAINTENANCE_HTML, reason=m_status['reason'], duration=m_status['duration'])
+    if m_status['active']:
+        return f"<body style='background:#0b0c10;color:white;text-align:center;padding:100px;font-family:sans-serif;'><h1>🛠️ Maintenance</h1><p>{m_status['reason']}</p><p>Duration: {m_status['duration']}</p></body>", 503
 
 @app.route('/')
 def index():
     mode_f = request.args.get('mode', '').strip().lower()
     search_q = request.args.get('search', '').strip().lower()
     
-    processed = []
-    if mode_f:
-        query = {"gamemode": {"$regex": f"^{mode_f}$", "$options": "i"}, "retired": {"$ne": True}}
-        raw_players = list(players_col.find(query))
+    raw_players = list(players_col.find({"retired": {"$ne": True}}))
+    stats = {}
+
+    for p in raw_players:
+        u, t, gm, reg = p['username'], p.get('tier', 'LT5'), p['gamemode'], p.get('region', 'NA')
         
-        for p in raw_players:
-            processed.append({
-                "username": p['username'],
-                "tier": p.get('tier', 'LT5'),
-                "region": p.get('region', 'NA')
-            })
-        
-        # Sort by Tier Order
-        processed = sorted(processed, key=lambda x: TIER_ORDER.index(x['tier']) if x['tier'] in TIER_ORDER else -1, reverse=True)
+        # If specific mode view
+        if mode_f:
+            if gm.lower() == mode_f:
+                stats[u] = {"username": u, "tier": t, "region": reg}
+        # If Global view, track the BEST tier across all kits
+        else:
+            current_tier_idx = TIER_ORDER.index(t) if t in TIER_ORDER else -1
+            if u not in stats or current_tier_idx > TIER_ORDER.index(stats[u]["tier"]):
+                stats[u] = {"username": u, "tier": t, "region": reg, "best_kit": gm}
+
+    processed = list(stats.values())
+    
+    # Global search filtering
+    if search_q:
+        processed = [p for p in processed if search_q in p['username'].lower()]
+
+    # Sort by Tier Priority
+    processed = sorted(processed, key=lambda x: TIER_ORDER.index(x['tier']) if x['tier'] in TIER_ORDER else -1, reverse=True)
 
     spotlight = None
     if search_q:
         p_data = list(players_col.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}}))
         if p_data:
-            spotlight = {
-                "username": p_data[0]['username'],
-                "region": p_data[0].get('region', 'NA'),
-                "all_stats": [{"gamemode": d['gamemode'], "tier": d.get('tier', 'LT5')} for d in p_data]
-            }
+            spotlight = {"username": p_data[0]['username'], "region": p_data[0].get('region', 'NA'),
+                         "all_stats": [{"gamemode": d['gamemode'], "tier": d.get('tier', 'LT5')} for d in p_data]}
 
-    return render_template_string(HTML_TEMPLATE, players=processed, spotlight=spotlight, search_query=search_q, all_modes=MODES, current_mode=mode_f)
+    return render_template_string(HTML_TEMPLATE, players=processed, spotlight=spotlight, 
+                                  search_query=search_q, all_modes=MODES, current_mode=mode_f)
 
 if __name__ == '__main__':
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
