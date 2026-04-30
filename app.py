@@ -7,14 +7,18 @@ import threading
 import datetime
 import sys
 
-# --- CONFIGURATION & SAFETY CHECK ---
+# --- RENDER ENVIRONMENT CHECK ---
+# Ensure these Keys match EXACTLY what you typed in the Render Environment tab.
 TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
 
+# This block prevents the 'NoneType' crash by checking the variables first
 if not TOKEN or not MONGO_URI or not LOG_CHANNEL_ID:
-    print("❌ CRITICAL ERROR: Missing environment variables (TOKEN, MONGO_URI, or LOG_CHANNEL_ID).")
-    print("Please add them in the Render Dashboard under the 'Environment' tab.")
+    print("❌ RENDER CONFIG ERROR: One or more environment variables are missing.")
+    if not TOKEN: print("- 'TOKEN' is missing. Check your Render Environment settings.")
+    if not MONGO_URI: print("- 'MONGO_URI' is missing. Check your Render Environment settings.")
+    if not LOG_CHANNEL_ID: print("- 'LOG_CHANNEL_ID' is missing. Check your Render Environment settings.")
     sys.exit(1)
 
 # --- DATABASE SETUP ---
@@ -24,7 +28,7 @@ try:
     players_col = db_mongo['players']
     settings_col = db_mongo['settings']
 except Exception as e:
-    print(f"❌ DATABASE ERROR: {e}")
+    print(f"❌ MONGODB CONNECTION ERROR: {e}")
     sys.exit(1)
 
 # --- DATA MAPS ---
@@ -49,7 +53,6 @@ def get_maintenance_status():
     return status if status else {"active": False, "reason": "None", "duration": "Unknown"}
 
 # --- DISCORD BOT ---
-
 class MagmaBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
@@ -78,11 +81,8 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         return await interaction.response.send_message("🛠️ System in maintenance.", ephemeral=True)
     
     tier_upper = tier.upper().strip()
-    if tier_upper not in TIER_ORDER:
-        return await interaction.response.send_message("Invalid Tier.", ephemeral=True)
-
-    # Calculate Promotion vs Demotion
     old_data = players_col.find_one({"username": player, "gamemode": mode.value})
+    
     action = "promoted"
     if old_data and "tier" in old_data:
         old_idx = TIER_ORDER.index(old_data['tier'])
@@ -99,18 +99,14 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
         embed = discord.Embed(title="Tier Update", color=0xff4500, timestamp=datetime.datetime.utcnow())
-        # The specific message format you requested
-        msg_title = f"**{player}** has been **{action}** to **{tier_upper}** in **{mode.value}**"
-        
-        embed.description = (
-            f"{msg_title}\n\n"
-            f"**User:** {discord_user.mention} -- {discord_user.name}\n"
-            f"**Reason:** {reason}\n\n"
-            f"**Tester:** {interaction.user.display_name} | **Region:** {region.value}"
-        )
+        # Updated specific message format
+        msg = f"**{player}** has been **{action}** to **{tier_upper}** in **{mode.value}**"
+        embed.description = (f"{msg}\n\n"
+                             f"**User:** {discord_user.mention} -- {discord_user.name}\n"
+                             f"**Reason:** {reason}\n\n"
+                             f"**Tester:** {interaction.user.display_name} | **Region:** {region.value}")
         embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
         await log_chan.send(embed=embed)
-    
     await interaction.response.send_message(f"✅ {player} {action} to {tier_upper}.", ephemeral=True)
 
 @bot.tree.command(name="match", description="Record silent activity")
@@ -124,7 +120,6 @@ async def match(interaction: discord.Interaction, player: str, mode: app_command
     await interaction.response.send_message(f"✅ Activity logged.", ephemeral=True)
 
 # --- WEB UI ---
-
 app = Flask(__name__)
 
 HTML_TEMPLATE = """
@@ -143,23 +138,21 @@ HTML_TEMPLATE = """
         .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 11px; transition: 0.2s; white-space: nowrap; }
         .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
         .wrapper { max-width: 900px; margin: auto; padding: 30px 20px; }
-        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 18px 25px; margin-bottom: 12px; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; cursor: pointer; }
-        .player-row:hover { border-color: var(--accent); transform: translateY(-2px); }
-        
+        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 18px 25px; margin-bottom: 12px; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
+        .player-row:hover { border-color: var(--accent); transform: scale(1.01); }
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:1001; display:flex; justify-content:center; align-items:center; backdrop-filter: blur(8px); }
         .profile-modal { background: #11141c; width: 420px; border-radius: 24px; border: 2px solid #2d3647; padding: 40px; position: relative; text-align: center; }
         .close-btn { position: absolute; top: 20px; right: 25px; color: var(--dim); text-decoration: none; font-size: 30px; font-weight: 800; }
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 25px; max-height: 300px; overflow-y: auto; }
         .stat-item { background: #1a1d26; padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
-        
         .rank-badge { font-size: 10px; padding: 2px 8px; border: 1px solid var(--accent); border-radius: 5px; margin-left: 10px; color: var(--accent); font-weight: 800; text-transform: uppercase; }
-        .NA { color: #ff6b6b; } .EU { color: #51cf66; } .ASIA { color: #fcc419; } .AF { color: #ff922b; } .OC { color: #339af0; } .SA { color: #ae3ec9; }
+        .NA { color: #ff6b6b; } .EU { color: #51cf66; } .ASIA { color: #fcc419; }
     </style>
 </head>
 <body>
     <div class="navbar">
         <a href="/" class="logo">Magma<span>TIERS</span></a>
-        <form action="/"><input type="text" name="search" style="background:#0b0c10; border:1px solid var(--border); padding:8px 18px; border-radius:20px; color:white; outline:none;" placeholder="Search player..." value="{{ search_query }}"></form>
+        <form action="/"><input type="text" name="search" style="background:#0b0c10; border:1px solid var(--border); padding:8px 18px; border-radius:20px; color:white; outline:none;" placeholder="Search..." value="{{ search_query }}"></form>
     </div>
     <div class="sub-nav">
         <a href="/" class="mode-btn {% if not current_mode %}active{% endif %}">GLOBAL</a>
@@ -210,8 +203,8 @@ def check_maint():
 def index():
     mode_f = request.args.get('mode', '').strip().lower()
     search_q = request.args.get('search', '').strip().lower()
-    
     raw_data = list(players_col.find({"retired": {"$ne": True}}))
+    
     user_map = {}
     for d in raw_data:
         u = d['username']
@@ -240,5 +233,7 @@ def index():
     return render_template_string(HTML_TEMPLATE, players=processed, spotlight=spotlight, all_modes=MODES, current_mode=mode_f, search_query=search_q)
 
 if __name__ == '__main__':
+    # Flask runs in a background thread
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
+    # Discord Bot runs in the main thread
     bot.run(TOKEN)
