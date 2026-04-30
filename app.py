@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, abort
 from pymongo import MongoClient
 import os
 import threading
@@ -10,29 +10,23 @@ import datetime
 TOKEN = os.getenv("DISCORD_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
-HIGH_TIER_CHANNEL_ID = os.getenv("HIGH_TIER_CHANNEL_ID")
+
+client_db = MongoClient(MONGO_URI)
+db_mongo = client_db['magmatiers_db']
+players_col = db_mongo['players']
+settings_col = db_mongo['settings']  # New collection for maintenance state
 
 # --- DATA MAPS ---
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
 REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
-TIER_DATA = {t: (i + 1) * 10 for i, t in enumerate(TIER_ORDER)}
-HIGH_TIERS = ["HT3", "LT2", "HT2", "LT1", "HT1"]
 
-client_db = MongoClient(MONGO_URI)
-db_mongo = client_db['magmatiers_db']
-players_col = db_mongo['players']
-
-def get_global_rank(pts):
-    if pts >= 500: return "Grandmaster"
-    if pts >= 250: return "Master"
-    if pts >= 150: return "Elite"
-    if pts >= 100: return "Diamond"
-    if pts >= 75:  return "Platinum"
-    if pts >= 50:  return "Gold"
-    if pts >= 25:  return "Silver"
-    if pts >= 10:  return "Bronze"
-    return "Stone"
+# --- MAINTENANCE HELPERS ---
+def get_maintenance_status():
+    status = settings_col.find_one({"_id": "maintenance_mode"})
+    if not status:
+        return {"active": False, "reason": "None", "duration": "Unknown"}
+    return status
 
 class MagmaBot(discord.Client):
     def __init__(self):
@@ -45,62 +39,50 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
-# --- MATCH LOGIC ---
-async def process_match(interaction, player, discord_user, mode, is_win):
-    point_change = 5 if is_win else -5
-    
-    players_col.update_one(
-        {"username": player, "gamemode": mode},
-        {"$inc": {"points": point_change, "wins": 1 if is_win else 0, "losses": 1 if not is_win else 0},
-         "$set": {"last_updated": datetime.datetime.utcnow(), "retired": False}},
+# --- DISCORD COMMANDS ---
+
+@bot.tree.command(name="maintenance", description="Toggle maintenance mode")
+@app_commands.describe(active="Enable or disable", reason="Reason for maintenance", duration="Estimated time")
+async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Technical Updates", duration: str = "1 hour"):
+    # Permissions check (Admin only recommended)
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ You don't have permission to do this.", ephemeral=True)
+
+    settings_col.update_one(
+        {"_id": "maintenance_mode"},
+        {"$set": {"active": active, "reason": reason, "duration": duration, "updated_at": datetime.datetime.utcnow()}},
         upsert=True
     )
     
-    p_data = players_col.find_one({"username": player, "gamemode": mode})
-    new_total = p_data.get("points", 0)
-
-    # Log embed no longer mentions "Win" or "Loss"
-    embed = discord.Embed(
-        title=f"ELO Update: {mode}",
-        description=f"**{player}** ({discord_user.display_name})\nAdjustment: **{'+5' if is_win else '-5'} PTS**\nNew Total: **{new_total} PTS**",
-        color=0x00ff00 if is_win else 0xff0000,
-        timestamp=datetime.datetime.utcnow()
-    )
-    embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
+    status = "ENABLED 🛠️" if active else "DISABLED ✅"
+    color = 0xff0000 if active else 0x00ff00
     
-    log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
-    if log_chan: await log_chan.send(embed=embed)
-    await interaction.response.send_message(f"✅ Points updated for {player}. New Total: {new_total} PTS.")
+    embed = discord.Embed(title=f"Maintenance Mode {status}", color=color)
+    embed.add_field(name="Reason", value=reason)
+    embed.add_field(name="Est. Duration", value=duration)
+    
+    await interaction.response.send_message(embed=embed)
 
-# --- DISCORD COMMANDS ---
 @bot.tree.command(name="rank")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
 async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str]):
+    m_status = get_maintenance_status()
+    if m_status['active']:
+        return await interaction.response.send_message(f"🛠️ **Bot is in Maintenance Mode.**\nReason: {m_status['reason']}", ephemeral=True)
+
     tier_upper = tier.upper().strip()
     if tier_upper not in TIER_ORDER:
         return await interaction.response.send_message("Invalid Tier.", ephemeral=True)
 
-    pts = TIER_DATA.get(tier_upper, 0)
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
-        {"$set": {"points": pts, "tier": tier_upper, "region": region.value, "retired": False}},
+        {"$set": {"tier": tier_upper, "region": region.value, "retired": False, "last_updated": datetime.datetime.utcnow()}},
         upsert=True
     )
-    await interaction.response.send_message(f"✅ Set {player} to {tier_upper}.")
-
-@bot.tree.command(name="win")
-@app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
-async def win(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str]):
-    await process_match(interaction, player, discord_user, mode.value, True)
-
-@bot.tree.command(name="loss")
-@app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
-async def loss(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str]):
-    await process_match(interaction, player, discord_user, mode.value, False)
-
+    await interaction.response.send_message(f"✅ Updated {player} to {tier_upper}.")
 # --- WEB UI ---
 app = Flask(__name__)
 
@@ -180,7 +162,15 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
-
+@app.before_request
+def check_for_maintenance():
+    # Allow /api-docs to stay up or bypass if needed, otherwise block
+    if request.path == '/api-docs':
+        return
+        
+    m_status = get_maintenance_status()
+    if m_status['active']:
+        return render_template_string(MAINTENANCE_HTML, reason=m_status['reason'], duration=m_status['duration'])
 @app.route('/')
 def index():
     mode_f = request.args.get('mode', '').strip().lower()
