@@ -9,13 +9,17 @@ import datetime
 # --- CONFIGURATION ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
-LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")      
+LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
+HIGH_TIER_CHANNEL_ID = os.getenv("HIGH_TIER_CHANNEL_ID") # New Variable
 
 # --- DATA MAPS ---
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
-REGIONS = ["NA", "EU", "ASIA", "AF", "OC"]
+REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 TIER_DATA = {t: (i + 1) * 5 for i, t in enumerate(TIER_ORDER)}
+
+# Tiers that trigger the High Tier Channel
+HIGH_TIERS = ["HT3", "LT2", "HT2", "LT1", "HT1"]
 
 client_db = MongoClient(MONGO_URI)
 db_mongo = client_db['magmatiers_db']
@@ -36,7 +40,7 @@ def get_global_rank(pts):
 class MagmaBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.members = True # Ensure members intent is on for name fetching
+        intents.members = True 
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
     async def setup_hook(self):
@@ -51,7 +55,7 @@ bot = MagmaBot()
 )
 async def rank(interaction: discord.Interaction, 
                player: str, 
-               discord_user: discord.Member, # Added to get the Discord Name
+               discord_user: discord.Member, 
                mode: app_commands.Choice[str], 
                tier: str, 
                region: app_commands.Choice[str], 
@@ -65,7 +69,6 @@ async def rank(interaction: discord.Interaction,
     if tier_upper not in TIER_ORDER:
         return await interaction.response.send_message("Invalid Tier.", ephemeral=True)
 
-    # Save Minecraft name to DB
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {
@@ -79,30 +82,40 @@ async def rank(interaction: discord.Interaction,
         upsert=True
     )
     
-    # --- LOGGING WITH DISCORD NAME ---
+    # --- LOGGING LOGIC ---
+    discord_name = discord_user.display_name
+    header = f"{discord_name} -- {player} "
+    if failed_tier:
+        header += f"Failed {failed_tier.upper()}"
+    
+    embed = discord.Embed(
+        title=f"Tier Update: {mode.value}",
+        description=f"**{header}**\nPromoted to **{tier_upper}**\n\n**Reason:** {reason}\n*(we count skill, not wins)*",
+        color=0xff4500,
+        timestamp=datetime.datetime.utcnow()
+    )
+    embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
+    embed.set_footer(text=f"Tester: {interaction.user.display_name} | Region: {region.value}")
+
+    # 1. Send to Regular Logs
     if LOG_CHANNEL_ID:
         try:
-            chan = bot.get_channel(int(LOG_CHANNEL_ID))
-            if chan:
-                # Uses Discord Global Name (or Display Name) instead of mention
-                discord_name = discord_user.display_name
-                header = f"{discord_name} -- {player} "
-                
-                if failed_tier:
-                    header += f"Failed {failed_tier.upper()}"
-                
-                embed = discord.Embed(
-                    title=f"Tier Update: {mode.value}",
-                    description=f"**{header}**\nPromoted to **{tier_upper}**\n\n**Reason:** {reason}\n*(we count skill, not wins)*",
-                    color=0xff4500,
-                    timestamp=datetime.datetime.utcnow()
-                )
-                embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-                embed.set_footer(text=f"Tester: {interaction.user.display_name} | Region: {region.value}")
-                
-                await chan.send(embed=embed)
-        except Exception as e:
-            print(f"Log Error: {e}")
+            log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
+            if log_chan:
+                await log_chan.send(embed=embed)
+        except: pass
+
+    # 2. Send to High Tier Logs (if tier is HT3 or higher)
+    if tier_upper in HIGH_TIERS and HIGH_TIER_CHANNEL_ID:
+        try:
+            hi_chan = bot.get_channel(int(HIGH_TIER_CHANNEL_ID))
+            if hi_chan:
+                # Optional: Add a special flair for High Tier messages
+                hi_embed = embed.copy()
+                hi_embed.title = f"🏆 HIGH TIER UPDATE: {mode.value}"
+                hi_embed.color = 0xffcc00 # Gold color for high tiers
+                await hi_chan.send(content="⭐ **New High Tier Promotion!**", embed=hi_embed)
+        except: pass
 
     await interaction.response.send_message(f"✅ Updated **{player}** ({discord_user.display_name}) to {tier_upper}.")
 
