@@ -22,7 +22,6 @@ client_db = MongoClient(MONGO_URI)
 db_mongo = client_db['magmatiers_db']
 players_col = db_mongo['players']
 
-# --- RANK NAMES ---
 def get_global_rank(pts):
     if pts >= 500: return "Grandmaster"
     if pts >= 250: return "Master"
@@ -45,7 +44,7 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
-# --- RANK COMMAND ---
+# --- FIXED RANK COMMAND WITH LOGS ---
 @bot.tree.command(name="rank", description="Update player tier")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
@@ -71,9 +70,26 @@ async def rank(interaction: discord.Interaction, player: str, mode: app_commands
         }},
         upsert=True
     )
-    await interaction.response.send_message(f"✅ Updated **{player}**.")
+    
+    # Send Log to Channel
+    if LOG_CHANNEL_ID:
+        try:
+            chan = bot.get_channel(int(LOG_CHANNEL_ID))
+            if chan:
+                embed = discord.Embed(
+                    title="📈 Tier Updated", 
+                    description=f"**{player}** has been set to **{tier_upper}** in **{mode.value}**", 
+                    color=0xff4500,
+                    timestamp=datetime.datetime.utcnow()
+                )
+                embed.add_field(name="Region", value=region.value)
+                embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
+                await chan.send(embed=embed)
+        except Exception as e:
+            print(f"Logging error: {e}")
 
-# --- RESTORED RETIRE COMMAND ---
+    await interaction.response.send_message(f"✅ Updated **{player}** to {tier_upper} in {mode.value}.")
+
 @bot.tree.command(name="retire", description="Retire a player from all leaderboards")
 async def retire(interaction: discord.Interaction, player: str):
     if not interaction.user.guild_permissions.manage_roles:
@@ -85,6 +101,10 @@ async def retire(interaction: discord.Interaction, player: str):
     )
     
     if result.modified_count > 0:
+        if LOG_CHANNEL_ID:
+            chan = bot.get_channel(int(LOG_CHANNEL_ID))
+            if chan:
+                await chan.send(f"💀 **{player}** has been retired by {interaction.user.mention}")
         await interaction.response.send_message(f"💀 **{player}** has been retired.")
     else:
         await interaction.response.send_message(f"❓ Player **{player}** not found.")
@@ -94,15 +114,13 @@ app = Flask(__name__)
 
 @app.route('/api/player/<username>')
 def get_player_api(username):
-    p_data = list(players_col.find({"username": {"$regex": f"^{username}$", "$options": "i"}, "retired": False}))
+    p_data = list(players_col.find({"username": {"$regex": f"^{username}$", "$options": "i"}, "retired": {"$ne": True}}))
     if not p_data: return jsonify({"tested": False}), 404
     return jsonify({
         "username": p_data[0]['username'], 
         "tested": True,
         "region": p_data[0].get('region', 'NA'),
         "ranks": {d['gamemode']: d['tier'] for d in p_data}
-    })
-
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
