@@ -22,12 +22,17 @@ client_db = MongoClient(MONGO_URI)
 db_mongo = client_db['magmatiers_db']
 players_col = db_mongo['players']
 
+# --- RANK NAMES ---
 def get_global_rank(pts):
-    if pts >= 500: return "Combat Grandmaster"
-    if pts >= 250: return "Combat Master"
-    if pts >= 100: return "Combat Ace"
-    if pts >= 50:  return "Combat Specialist"
-    return "Rookie"
+    if pts >= 500: return "Grandmaster"
+    if pts >= 250: return "Master"
+    if pts >= 150: return "Elite"
+    if pts >= 100: return "Diamond"
+    if pts >= 75:  return "Platinum"
+    if pts >= 50:  return "Gold"
+    if pts >= 25:  return "Silver"
+    if pts >= 10:  return "Bronze"
+    return "Stone"
 
 # --- DISCORD BOT ---
 class MagmaBot(discord.Client):
@@ -40,6 +45,7 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
+# --- RANK COMMAND ---
 @bot.tree.command(name="rank", description="Update player tier")
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
@@ -55,26 +61,40 @@ async def rank(interaction: discord.Interaction, player: str, mode: app_commands
 
     players_col.update_one(
         {"username": player, "gamemode": mode.value},
-        {"$set": {"username": player, "gamemode": mode.value, "tier": tier_upper, "region": region.value, "retired": False, "last_updated": datetime.datetime.utcnow()}},
+        {"$set": {
+            "username": player, 
+            "gamemode": mode.value, 
+            "tier": tier_upper, 
+            "region": region.value, 
+            "retired": False, 
+            "last_updated": datetime.datetime.utcnow()
+        }},
         upsert=True
     )
-    
-    if LOG_CHANNEL_ID:
-        try:
-            chan = bot.get_channel(int(LOG_CHANNEL_ID))
-            if chan:
-                embed = discord.Embed(title="Tier Update", description=f"**{player}** updated to **{tier_upper}** in **{mode.value}**", color=0xff4500)
-                await chan.send(embed=embed)
-        except: pass
-
     await interaction.response.send_message(f"✅ Updated **{player}**.")
+
+# --- RESTORED RETIRE COMMAND ---
+@bot.tree.command(name="retire", description="Retire a player from all leaderboards")
+async def retire(interaction: discord.Interaction, player: str):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("❌ Staff only.", ephemeral=True)
+    
+    result = players_col.update_many(
+        {"username": {"$regex": f"^{player}$", "$options": "i"}},
+        {"$set": {"retired": True}}
+    )
+    
+    if result.modified_count > 0:
+        await interaction.response.send_message(f"💀 **{player}** has been retired.")
+    else:
+        await interaction.response.send_message(f"❓ Player **{player}** not found.")
 
 # --- WEB UI & API ---
 app = Flask(__name__)
 
 @app.route('/api/player/<username>')
 def get_player_api(username):
-    p_data = list(players_col.find({"username": {"$regex": f"^{username}$", "$options": "i"}}))
+    p_data = list(players_col.find({"username": {"$regex": f"^{username}$", "$options": "i"}, "retired": False}))
     if not p_data: return jsonify({"tested": False}), 404
     return jsonify({
         "username": p_data[0]['username'], 
@@ -101,13 +121,11 @@ HTML_TEMPLATE = """
         .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 11px; transition: 0.2s; white-space: nowrap; }
         .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
 
-        /* Legacy Animated Profile Modal */
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:1001; display:flex; justify-content:center; align-items:center; backdrop-filter: blur(10px); }
         .profile-modal { background: #11141c; width: 420px; border-radius: 24px; border: 2px solid #2d3647; padding: 40px; position: relative; text-align: center; }
         .close-btn { position: absolute; top: 20px; right: 25px; color: var(--dim); text-decoration: none; font-size: 30px; }
         .modal-avatar { width: 110px; height: 110px; border-radius: 15px; border: 4px solid var(--accent); margin-bottom: 20px; }
         
-        /* Insane Animated Borders */
         .insane-row { position: relative; background: var(--card) !important; z-index: 1; }
         .insane-row::before { content: ''; position: absolute; inset: -2px; z-index: -1; background: conic-gradient(from var(--angle), transparent 70%, #ff4500, #ff8c00, #ff4500); animation: rotate 2s linear infinite; border-radius: 17px; }
         @property --angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
@@ -179,7 +197,8 @@ def index():
     region_f = request.args.get('region', '').strip().upper()
     search_q = request.args.get('search', '').strip().lower()
     
-    raw_players = list(players_col.find({"retired": False}))
+    # Strictly filter by retired=False
+    raw_players = list(players_col.find({"retired": {"$ne": True}}))
     stats = {}
     
     for p in raw_players:
@@ -204,7 +223,7 @@ def index():
 
     spotlight = None
     if search_q:
-        p_data = list(players_col.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}}))
+        p_data = list(players_col.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}, "retired": {"$ne": True}}))
         if p_data:
             pos = next((i + 1 for i, p in enumerate(processed) if p['username'].lower() == search_q), "?")
             spotlight = {"username": p_data[0]['username'], "pos": pos, "region": p_data[0].get('region', 'NA'), "all_stats": [{"gamemode": d['gamemode'], "tier": d['tier']} for d in p_data]}
