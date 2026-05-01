@@ -202,6 +202,8 @@ HTML_TEMPLATE = """
         .close { position: absolute; top: 20px; right: 25px; font-size: 2rem; cursor: pointer; color: var(--dim); }
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 25px; max-height: 250px; overflow-y: auto; }
         .stat-box { background: #1a1d26; padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
+        /* Retired Style */
+        .stat-retired { opacity: 0.4; filter: grayscale(1); border-style: dashed !important; }
         .maint-container { height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
     </style>
 </head>
@@ -227,8 +229,10 @@ HTML_TEMPLATE = """
             <div style="margin: 15px 0;"><span class="badge">{{ spotlight.rank_name }}</span></div>
             <div class="stat-grid">
                 {% for s in spotlight.all_stats %}
-                <div class="stat-box">
-                    <div style="font-size:0.75rem; color:var(--accent); font-weight: 800;">{{ s.mode|upper }}</div>
+                <div class="stat-box {% if s.retired %}stat-retired{% endif %}">
+                    <div style="font-size:0.75rem; color:var(--accent); font-weight: 800;">
+                        {{ s.mode|upper }} {% if s.retired %}(RETIRED){% endif %}
+                    </div>
                     <div style="font-weight:700;">{{ s.tier }}</div>
                 </div>
                 {% endfor %}
@@ -278,32 +282,54 @@ def index():
     mode_q = request.args.get('mode', '').strip().lower()
     search_q = request.args.get('search', '').strip().lower()
     
-    # Filter out retired or banned entries
-    raw = list(db_manager.players.find({"retired": {"$ne": True}, "banned": {"$ne": True}}))
+    # Get everyone not banned
+    raw = list(db_manager.players.find({"banned": {"$ne": True}}))
+    
     users = {}
     for r in raw:
         u = r['username']
-        if u not in users: users[u] = {"username": u, "tiers": [], "kits": {}, "region": r.get('region', 'NA')}
-        users[u]["tiers"].append(r['tier'])
-        users[u]["kits"][r['gamemode'].lower()] = r['tier']
+        if u not in users: 
+            users[u] = {"username": u, "tiers": [], "kits": {}, "region": r.get('region', 'NA')}
+        
+        # Only add to global score/leaderboard if NOT retired
+        if not r.get('retired', False):
+            users[u]["tiers"].append(r['tier'])
+            users[u]["kits"][r['gamemode'].lower()] = r['tier']
 
     processed = []
     high_results = []
     spotlight = None
+
+    # Handle Spotlight (Profile Modal) separately to show ALL stats including retired
+    if search_q:
+        p_data = list(db_manager.players.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}, "banned": {"$ne": True}}))
+        if p_data:
+            real_name = p_data[0]['username']
+            # Calculate score only on active tiers for the badge
+            active_tiers = [x['tier'] for x in p_data if not x.get('retired', False)]
+            spotlight = {
+                "username": real_name, 
+                "rank_name": get_global_rank_name(active_tiers),
+                "all_stats": [{"mode": x['gamemode'], "tier": x['tier'], "retired": x.get('retired', False)} for x in p_data]
+            }
+
     for u, data in users.items():
+        if not data["tiers"]: continue # Skip users with only retired tiers for the main list
+        
         t_score = calculate_player_score(data["tiers"])
         r_name = get_global_rank_name(data["tiers"])
         best_tier = max(data["tiers"], key=lambda t: get_tier_value(t))
+        
         entry = {
-            "username": u, "display_tier": data["kits"].get(mode_q, best_tier) if mode_q else best_tier,
+            "username": u, 
+            "display_tier": data["kits"].get(mode_q, best_tier) if mode_q else best_tier,
             "total_score": t_score, "rank_name": r_name, "region": data['region'],
             "sort_val": get_tier_value(data["kits"].get(mode_q)) if mode_q else t_score
         }
-        if search_q and search_q.lower() == u.lower():
-            p_data = list(db_manager.players.find({"username": {"$regex": f"^{u}$", "$options": "i"}, "retired": {"$ne": True}}))
-            spotlight = {"username": u, "score": t_score, "rank_name": r_name, "all_stats": [{"mode": x['gamemode'], "tier": x['tier']} for x in p_data]}
+        
         if search_q and search_q not in u.lower(): continue
         if mode_q and mode_q not in data["kits"]: continue
+        
         processed.append(entry)
         if r_name in ["Grandmaster", "Legend"]: high_results.append(entry)
 
@@ -311,7 +337,6 @@ def index():
     high_results = sorted(high_results, key=lambda x: x['total_score'], reverse=True)
 
     return render_template_string(HTML_TEMPLATE, players=processed, high_results=high_results, spotlight=spotlight, all_modes=MODES, cur_mode=mode_q, search_q=search_q, maintenance_active=m_stat['active'], maintenance_reason=m_stat['reason'])
-
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
     bot.run(TOKEN)
