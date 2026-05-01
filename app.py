@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, jsonify
 from pymongo import MongoClient
 import os
 import threading
@@ -8,17 +8,12 @@ import datetime
 import sys
 
 # --- RENDER ENVIRONMENT CHECK ---
-# Ensure these Keys match EXACTLY what you typed in the Render Environment tab.
 TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
 
-# This block prevents the 'NoneType' crash by checking the variables first
 if not TOKEN or not MONGO_URI or not LOG_CHANNEL_ID:
-    print("❌ RENDER CONFIG ERROR: One or more environment variables are missing.")
-    if not TOKEN: print("- 'TOKEN' is missing. Check your Render Environment settings.")
-    if not MONGO_URI: print("- 'MONGO_URI' is missing. Check your Render Environment settings.")
-    if not LOG_CHANNEL_ID: print("- 'LOG_CHANNEL_ID' is missing. Check your Render Environment settings.")
+    print("❌ RENDER CONFIG ERROR: Missing environment variables.")
     sys.exit(1)
 
 # --- DATABASE SETUP ---
@@ -99,7 +94,6 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
         embed = discord.Embed(title="Tier Update", color=0xff4500, timestamp=datetime.datetime.utcnow())
-        # Updated specific message format
         msg = f"**{player}** has been **{action}** to **{tier_upper}** in **{mode.value}**"
         embed.description = (f"{msg}\n\n"
                              f"**User:** {discord_user.mention} -- {discord_user.name}\n"
@@ -109,19 +103,28 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         await log_chan.send(embed=embed)
     await interaction.response.send_message(f"✅ {player} {action} to {tier_upper}.", ephemeral=True)
 
-@bot.tree.command(name="match", description="Record silent activity")
-@app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
-async def match(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str]):
-    players_col.update_one(
-        {"username": player, "gamemode": mode.value},
-        {"$set": {"last_updated": datetime.datetime.utcnow(), "retired": False}},
-        upsert=True
-    )
-    await interaction.response.send_message(f"✅ Activity logged.", ephemeral=True)
-
-# --- WEB UI ---
+# --- WEB UI & API ---
 app = Flask(__name__)
 
+# --- API ENDPOINTS ---
+@app.route('/api/player/<username>')
+def api_player(username):
+    p_data = list(players_col.find({"username": {"$regex": f"^{username}$", "$options": "i"}}))
+    if not p_data:
+        return jsonify({"error": "Player not found"}), 404
+    
+    tiers = [x['tier'] for x in p_data]
+    return jsonify({
+        "username": p_data[0]['username'],
+        "global_rank": get_global_rank_name(tiers),
+        "stats": [{"mode": d['gamemode'], "tier": d['tier'], "region": d.get('region', 'NA')} for d in p_data]
+    })
+
+@app.route('/api/maintenance')
+def api_maint():
+    return jsonify(get_maintenance_status())
+
+# --- FRONTEND ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -195,8 +198,9 @@ HTML_TEMPLATE = """
 
 @app.before_request
 def check_maint():
+    # Allow API calls even during maintenance if needed, or block them too:
     m = get_maintenance_status()
-    if m['active']:
+    if m['active'] and not request.path.startswith('/api'):
         return f"<body style='background:#0b0c10;color:white;text-align:center;padding-top:100px;font-family:Fredoka,sans-serif;'><h1>🛠️ Maintenance Mode</h1><p>{m['reason']}</p><p>Duration: {m['duration']}</p></body>", 503
 
 @app.route('/')
@@ -233,7 +237,5 @@ def index():
     return render_template_string(HTML_TEMPLATE, players=processed, spotlight=spotlight, all_modes=MODES, current_mode=mode_f, search_query=search_q)
 
 if __name__ == '__main__':
-    # Flask runs in a background thread
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
-    # Discord Bot runs in the main thread
     bot.run(TOKEN)
