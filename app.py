@@ -1,6 +1,6 @@
 """
-MAGMATIERS INTEGRATED SYSTEM - VERSION 3.7
-Final Polish: Precise Notification Format, High Results, and Colored Regions.
+MAGMATIERS INTEGRATED SYSTEM - VERSION 3.8
+Restored Profile Modals, Precise Notifications, High Results, and Colored Regions.
 """
 
 import discord
@@ -89,18 +89,13 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     if tier_upper not in TIER_ORDER:
         return await interaction.response.send_message("❌ Invalid tier format.", ephemeral=True)
 
-    # Determine Promotion vs Demotion
     old_record = db_manager.players.find_one({"username": player, "gamemode": mode.value})
-    action = "promoted" # Default for new entries
+    action = "promoted"
     if old_record:
         old_val = get_tier_value(old_record['tier'])
         new_val = get_tier_value(tier_upper)
-        if new_val < old_val:
-            action = "demoted"
-        else:
-            action = "promoted"
+        action = "demoted" if new_val < old_val else "promoted"
 
-    # Database Update
     db_manager.players.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {
@@ -113,24 +108,19 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         upsert=True
     )
 
-    # --- UPDATED NOTIFICATION FORMAT ---
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
-        # Format: 
-        # <mention>
-        # <username> promoted/demoted to <tier> in <gamemode>
+        # EXACT REQUESTED FORMAT
         msg_content = f"{discord_user.mention}\n**{player}** {action} to **{tier_upper}** in **{mode.value}**"
         
-        # Adding embed for visuals but keeping the requested text as the main content
         embed = discord.Embed(color=0x4ade80 if action == "promoted" else 0xf87171)
         embed.set_footer(text=f"Reason: {reason} | Region: {region.value}")
         embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-        
         await log_chan.send(content=msg_content, embed=embed)
 
     await interaction.response.send_message(f"✅ Successfully updated **{player}**.", ephemeral=True)
 
-# --- WEB UI ---
+# --- WEB UI WITH OLD PROFILE SYSTEM ---
 app = Flask(__name__)
 
 HTML_TEMPLATE = """
@@ -150,27 +140,57 @@ HTML_TEMPLATE = """
         .nav-btn.active { border-color: var(--accent); color: white; }
         .container { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
         
+        /* High Results */
         .high-results { background: rgba(255, 69, 0, 0.05); border: 2px solid var(--accent); border-radius: 15px; padding: 20px; margin-bottom: 30px; }
         .high-title { color: var(--accent); font-weight: 800; text-transform: uppercase; margin-bottom: 15px; font-size: 0.9rem; }
 
-        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; margin-bottom: 0.8rem; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
+        /* Rows */
+        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; margin-bottom: 0.8rem; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; cursor: pointer; }
         .player-row:hover { border-color: var(--accent); transform: translateY(-2px); }
         .pos { font-size: 1.3rem; font-weight: 800; color: var(--accent); }
         .badge { background: rgba(255, 69, 0, 0.1); color: var(--accent); font-size: 0.7rem; font-weight: 800; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--accent); text-transform: uppercase; }
         
         .reg-na { color: #4ade80; } .reg-eu { color: #60a5fa; } .reg-asia { color: #f87171; }
         .reg-oc { color: #fbbf24; } .reg-af { color: #a78bfa; } .reg-sa { color: #2dd4bf; }
+
+        /* Profile Modal System */
+        .modal-bg { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); display:flex; justify-content:center; align-items:center; z-index:2000; backdrop-filter: blur(8px); }
+        .modal { background: #11141c; width: 420px; padding: 40px; border-radius: 24px; border: 1px solid var(--border); text-align: center; position: relative; box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
+        .close { position: absolute; top: 20px; right: 25px; font-size: 2rem; cursor: pointer; color: var(--dim); }
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 25px; max-height: 250px; overflow-y: auto; padding-right: 5px; }
+        .stat-box { background: #1a1d26; padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
     </style>
 </head>
 <body>
     <div class="header">
         <a href="/" class="logo">Magma<span>TIERS</span></a>
-        <form><input type="text" name="search" placeholder="Search..." style="background:var(--bg); border:1px solid var(--border); padding:8px 15px; border-radius:20px; color:white;" value="{{ search_q }}"></form>
+        <form><input type="text" name="search" placeholder="Search player..." style="background:var(--bg); border:1px solid var(--border); padding:8px 15px; border-radius:20px; color:white;" value="{{ search_q }}"></form>
     </div>
     <div class="nav-strip">
         <a href="/" class="nav-btn {% if not cur_mode %}active{% endif %}">GLOBAL</a>
         {% for m in all_modes %}<a href="/?mode={{m}}" class="nav-btn {% if cur_mode == m %}active{% endif %}">{{m|upper}}</a>{% endfor %}
     </div>
+
+    <!-- PROFILE MODAL (Old System) -->
+    {% if spotlight %}
+    <div class="modal-bg" onclick="window.location.href='/'">
+        <div class="modal" onclick="event.stopPropagation()">
+            <span class="close" onclick="window.location.href='/'">&times;</span>
+            <img src="https://minotar.net/helm/{{spotlight.username}}/120.png" style="border-radius:15px; margin-bottom:20px; border: 3px solid var(--accent);">
+            <h2 style="margin:0; font-size: 2rem;">{{ spotlight.username }}</h2>
+            <div style="margin: 15px 0;"><span class="badge" style="font-size: 1rem; padding: 5px 15px;">{{ spotlight.rank_name }}</span></div>
+            <p style="color:var(--dim); font-weight: 600;">Power Score: <span style="color:white;">{{ spotlight.score }}</span></p>
+            <div class="stat-grid">
+                {% for s in spotlight.all_stats %}
+                <div class="stat-box">
+                    <div style="font-size:0.75rem; color:var(--accent); font-weight: 800;">{{ s.mode|upper }}</div>
+                    <div style="font-weight:700; font-size: 1.1rem;">{{ s.tier }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     <div class="container">
         {% if high_results and not cur_mode and not search_q %}
@@ -221,23 +241,36 @@ def index():
 
     processed = []
     high_results = []
+    spotlight = None
+
     for u, data in users.items():
         t_score = calculate_player_score(data["tiers"])
         r_name = get_global_rank_name(data["tiers"])
         best_tier = max(data["tiers"], key=lambda t: get_tier_value(t))
+        
         entry = {
             "username": u, "display_tier": data["kits"].get(mode_q, best_tier) if mode_q else best_tier,
             "total_score": t_score, "rank_name": r_name, "region": data['region'],
             "sort_val": get_tier_value(data["kits"].get(mode_q)) if mode_q else t_score
         }
+
+        if search_q and search_q.lower() == u.lower():
+            p_data = list(db_manager.players.find({"username": {"$regex": f"^{u}$", "$options": "i"}}))
+            spotlight = {
+                "username": u, "score": t_score, "rank_name": r_name,
+                "all_stats": [{"mode": x['gamemode'], "tier": x['tier']} for x in p_data]
+            }
+
         if search_q and search_q not in u.lower(): continue
         if mode_q and mode_q not in data["kits"]: continue
+        
         processed.append(entry)
         if r_name in ["Grandmaster", "Legend"]: high_results.append(entry)
 
     processed = sorted(processed, key=lambda x: x['sort_val'], reverse=True)
     high_results = sorted(high_results, key=lambda x: x['total_score'], reverse=True)
-    return render_template_string(HTML_TEMPLATE, players=processed, high_results=high_results, all_modes=MODES, cur_mode=mode_q, search_q=search_q)
+
+    return render_template_string(HTML_TEMPLATE, players=processed, high_results=high_results, spotlight=spotlight, all_modes=MODES, cur_mode=mode_q, search_q=search_q)
 
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
