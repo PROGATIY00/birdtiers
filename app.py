@@ -1,6 +1,6 @@
 """
-MAGMATIERS INTEGRATED SYSTEM - VERSION 3.6
-Fixed PyMongo 'is None' checks, Colored Regions, Promo/Demo Messages, and HIGH RESULTS Spotlight.
+MAGMATIERS INTEGRATED SYSTEM - VERSION 3.7
+Final Polish: Precise Notification Format, High Results, and Colored Regions.
 """
 
 import discord
@@ -64,12 +64,6 @@ def get_global_rank_name(tier_list):
     if total_score >= 8: return "Diamond"
     return "Bronze"
 
-def get_maintenance_status():
-    if db_manager.db is None:
-        return {"active": True, "reason": "Database connection lost.", "duration": "N/A"}
-    status = db_manager.settings.find_one({"_id": "maintenance_mode"})
-    return status if status else {"active": False, "reason": "None", "duration": "Unknown"}
-
 # --- DISCORD BOT ---
 class MagmaBot(discord.Client):
     def __init__(self):
@@ -91,23 +85,22 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("❌ Permissions required.", ephemeral=True)
     
-    if get_maintenance_status()['active']:
-        return await interaction.response.send_message("🛠️ Maintenance mode active.", ephemeral=True)
-
     tier_upper = tier.upper().strip()
     if tier_upper not in TIER_ORDER:
         return await interaction.response.send_message("❌ Invalid tier format.", ephemeral=True)
 
+    # Determine Promotion vs Demotion
     old_record = db_manager.players.find_one({"username": player, "gamemode": mode.value})
-    action = "updated"
+    action = "promoted" # Default for new entries
     if old_record:
         old_val = get_tier_value(old_record['tier'])
         new_val = get_tier_value(tier_upper)
-        if new_val > old_val: action = "promoted"
-        elif new_val < old_val: action = "demoted"
-    else:
-        action = "promoted"
+        if new_val < old_val:
+            action = "demoted"
+        else:
+            action = "promoted"
 
+    # Database Update
     db_manager.players.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {
@@ -120,24 +113,22 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         upsert=True
     )
 
+    # --- UPDATED NOTIFICATION FORMAT ---
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
-        embed = discord.Embed(
-            title="🏆 Tier Registry Update", 
-            color=0x4ade80 if action == "promoted" else 0xf87171 if action == "demoted" else 0x60a5fa, 
-            timestamp=datetime.datetime.utcnow()
-        )
-        embed.description = (
-            f"**{player}** has been **{action}** to **{tier_upper} {mode.value}**\n\n"
-            f"👤 **User:** {discord_user.mention}\n"
-            f"🌍 **Region:** {region.value}\n"
-            f"📝 **Reason:** {reason}\n"
-            f"🛡️ **Tester:** {interaction.user.mention}"
-        )
+        # Format: 
+        # <mention>
+        # <username> promoted/demoted to <tier> in <gamemode>
+        msg_content = f"{discord_user.mention}\n**{player}** {action} to **{tier_upper}** in **{mode.value}**"
+        
+        # Adding embed for visuals but keeping the requested text as the main content
+        embed = discord.Embed(color=0x4ade80 if action == "promoted" else 0xf87171)
+        embed.set_footer(text=f"Reason: {reason} | Region: {region.value}")
         embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-        await log_chan.send(content=f"{discord_user.mention}", embed=embed)
+        
+        await log_chan.send(content=msg_content, embed=embed)
 
-    await interaction.response.send_message(f"✅ Successfully {action} **{player}**.", ephemeral=True)
+    await interaction.response.send_message(f"✅ Successfully updated **{player}**.", ephemeral=True)
 
 # --- WEB UI ---
 app = Flask(__name__)
@@ -159,9 +150,8 @@ HTML_TEMPLATE = """
         .nav-btn.active { border-color: var(--accent); color: white; }
         .container { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
         
-        /* High Results Styling */
         .high-results { background: rgba(255, 69, 0, 0.05); border: 2px solid var(--accent); border-radius: 15px; padding: 20px; margin-bottom: 30px; }
-        .high-title { color: var(--accent); font-weight: 800; text-transform: uppercase; margin-bottom: 15px; font-size: 0.9rem; letter-spacing: 1px; }
+        .high-title { color: var(--accent); font-weight: 800; text-transform: uppercase; margin-bottom: 15px; font-size: 0.9rem; }
 
         .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; margin-bottom: 0.8rem; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
         .player-row:hover { border-color: var(--accent); transform: translateY(-2px); }
@@ -185,14 +175,12 @@ HTML_TEMPLATE = """
     <div class="container">
         {% if high_results and not cur_mode and not search_q %}
         <div class="high-results">
-            <div class="high-title">🔥 High Results (Grandmaster & Legend)</div>
+            <div class="high-title">🔥 High Results</div>
             {% for p in high_results %}
             <a href="/?search={{p.username}}" class="player-row" style="border-color: gold;">
                 <div class="pos">⭐</div>
                 <img src="https://minotar.net/helm/{{p.username}}/48.png" style="border-radius:6px;">
-                <div>
-                    <span style="font-weight:700;">{{ p.username }}</span> <span class="badge">{{ p.rank_name }}</span>
-                </div>
+                <div><span style="font-weight:700;">{{ p.username }}</span> <span class="badge">{{ p.rank_name }}</span></div>
                 <div class="reg-{{ p.region|lower }}" style="font-weight:700;">{{ p.region }}</div>
                 <div style="text-align:right; font-weight:800; color:var(--accent); font-size:1.4rem;">{{ p.display_tier }}</div>
             </a>
@@ -220,7 +208,6 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     if db_manager.db is None: return "Database Error.", 500
-    
     mode_q = request.args.get('mode', '').strip().lower()
     search_q = request.args.get('search', '').strip().lower()
     
@@ -234,27 +221,22 @@ def index():
 
     processed = []
     high_results = []
-
     for u, data in users.items():
         t_score = calculate_player_score(data["tiers"])
         r_name = get_global_rank_name(data["tiers"])
         best_tier = max(data["tiers"], key=lambda t: get_tier_value(t))
-
         entry = {
             "username": u, "display_tier": data["kits"].get(mode_q, best_tier) if mode_q else best_tier,
             "total_score": t_score, "rank_name": r_name, "region": data['region'],
             "sort_val": get_tier_value(data["kits"].get(mode_q)) if mode_q else t_score
         }
-
         if search_q and search_q not in u.lower(): continue
         if mode_q and mode_q not in data["kits"]: continue
-        
         processed.append(entry)
         if r_name in ["Grandmaster", "Legend"]: high_results.append(entry)
 
     processed = sorted(processed, key=lambda x: x['sort_val'], reverse=True)
     high_results = sorted(high_results, key=lambda x: x['total_score'], reverse=True)
-
     return render_template_string(HTML_TEMPLATE, players=processed, high_results=high_results, all_modes=MODES, cur_mode=mode_q, search_q=search_q)
 
 if __name__ == "__main__":
