@@ -1,6 +1,6 @@
 """
-MAGMATIERS INTEGRATED SYSTEM - VERSION 4.0
-Restored Maintenance Mode, Text Notifications, Profile Modals, and High Results.
+MAGMATIERS INTEGRATED SYSTEM - VERSION 4.1
+Restored Reason text to notifications. Text-only format, Profiles, and Maintenance.
 """
 
 import discord
@@ -41,7 +41,6 @@ class DatabaseManager:
 
 db_manager = DatabaseManager(MONGO_URI)
 
-# --- CORE RANKING LOGIC ---
 def get_tier_value(tier_name):
     try:
         return TIER_ORDER.index(tier_name.upper().strip()) + 1
@@ -56,7 +55,6 @@ def get_global_rank_name(tier_list):
     total_score = calculate_player_score(tier_list)
     numeric_tiers = [get_tier_value(t) for t in tier_list]
     highest = max(numeric_tiers) if numeric_tiers else 0
-    
     if highest >= 9 and len(tier_list) >= 3: return "Grandmaster"
     if total_score >= 35: return "Legend"
     if total_score >= 25: return "Master"
@@ -65,8 +63,7 @@ def get_global_rank_name(tier_list):
     return "Bronze"
 
 def get_maintenance_status():
-    if db_manager.db is None:
-        return {"active": True, "reason": "Database connection lost."}
+    if db_manager.db is None: return {"active": True, "reason": "Database connection lost."}
     status = db_manager.settings.find_one({"_id": "maintenance_mode"})
     return status if status else {"active": False, "reason": "None"}
 
@@ -117,9 +114,14 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         upsert=True
     )
 
+    # --- TEXT-ONLY NOTIFICATION WITH REASON ---
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
-        msg_content = f"{discord_user.mention}\n**{player}** {action} to **{tier_upper}** in **{mode.value}**"
+        msg_content = (
+            f"{discord_user.mention}\n"
+            f"**{player}** {action} to **{tier_upper}** in **{mode.value}**\n"
+            f"**Reason:** {reason}"
+        )
         await log_chan.send(content=msg_content)
 
     await interaction.response.send_message(f"✅ Successfully updated **{player}**.", ephemeral=True)
@@ -129,8 +131,7 @@ async def maintenance(interaction: discord.Interaction, active: bool, reason: st
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
     db_manager.settings.update_one({"_id": "maintenance_mode"}, {"$set": {"active": active, "reason": reason}}, upsert=True)
-    status = "ENABLED" if active else "DISABLED"
-    await interaction.response.send_message(f"🛠️ Maintenance mode has been **{status}**. Reason: {reason}")
+    await interaction.response.send_message(f"🛠️ Maintenance mode has been **{'ENABLED' if active else 'DISABLED'}**.")
 
 # --- WEB UI ---
 app = Flask(__name__)
@@ -159,30 +160,25 @@ HTML_TEMPLATE = """
         .badge { background: rgba(255, 69, 0, 0.1); color: var(--accent); font-size: 0.7rem; font-weight: 800; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--accent); text-transform: uppercase; }
         .reg-na { color: #4ade80; } .reg-eu { color: #60a5fa; } .reg-asia { color: #f87171; }
         .reg-oc { color: #fbbf24; } .reg-af { color: #a78bfa; } .reg-sa { color: #2dd4bf; }
-        
-        /* Modal System */
         .modal-bg { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); display:flex; justify-content:center; align-items:center; z-index:2000; backdrop-filter: blur(8px); }
         .modal { background: #11141c; width: 420px; padding: 40px; border-radius: 24px; border: 1px solid var(--border); text-align: center; position: relative; }
         .close { position: absolute; top: 20px; right: 25px; font-size: 2rem; cursor: pointer; color: var(--dim); }
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 25px; max-height: 250px; overflow-y: auto; }
         .stat-box { background: #1a1d26; padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
-
-        /* Maintenance Splash */
         .maint-container { height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
-        .maint-icon { font-size: 4rem; margin-bottom: 20px; }
     </style>
 </head>
 <body>
     {% if maintenance_active %}
     <div class="maint-container">
-        <div class="maint-icon">🛠️</div>
+        <h1 style="font-size:3rem;">🛠️</h1>
         <h1>Under Maintenance</h1>
         <p style="color:var(--dim);">{{ maintenance_reason }}</p>
     </div>
     {% else %}
     <div class="header">
         <a href="/" class="logo">Magma<span>TIERS</span></a>
-        <form><input type="text" name="search" placeholder="Search player..." style="background:var(--bg); border:1px solid var(--border); padding:8px 15px; border-radius:20px; color:white;" value="{{ search_q }}"></form>
+        <form><input type="text" name="search" placeholder="Search..." style="background:var(--bg); border:1px solid var(--border); padding:8px 15px; border-radius:20px; color:white;" value="{{ search_q }}"></form>
     </div>
     <div class="nav-strip">
         <a href="/" class="nav-btn {% if not cur_mode %}active{% endif %}">GLOBAL</a>
@@ -196,7 +192,6 @@ HTML_TEMPLATE = """
             <img src="https://minotar.net/helm/{{spotlight.username}}/120.png" style="border-radius:15px; margin-bottom:20px; border: 3px solid var(--accent);">
             <h2 style="margin:0;">{{ spotlight.username }}</h2>
             <div style="margin: 15px 0;"><span class="badge">{{ spotlight.rank_name }}</span></div>
-            <p style="color:var(--dim);">Power Score: {{ spotlight.score }}</p>
             <div class="stat-grid">
                 {% for s in spotlight.all_stats %}
                 <div class="stat-box">
@@ -246,11 +241,9 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     if db_manager.db is None: return "Database Error.", 500
-    
     m_stat = get_maintenance_status()
     mode_q = request.args.get('mode', '').strip().lower()
     search_q = request.args.get('search', '').strip().lower()
-    
     raw = list(db_manager.players.find({"retired": {"$ne": True}}))
     users = {}
     for r in raw:
@@ -262,40 +255,27 @@ def index():
     processed = []
     high_results = []
     spotlight = None
-
     for u, data in users.items():
         t_score = calculate_player_score(data["tiers"])
         r_name = get_global_rank_name(data["tiers"])
         best_tier = max(data["tiers"], key=lambda t: get_tier_value(t))
-        
         entry = {
             "username": u, "display_tier": data["kits"].get(mode_q, best_tier) if mode_q else best_tier,
             "total_score": t_score, "rank_name": r_name, "region": data['region'],
             "sort_val": get_tier_value(data["kits"].get(mode_q)) if mode_q else t_score
         }
-
         if search_q and search_q.lower() == u.lower():
             p_data = list(db_manager.players.find({"username": {"$regex": f"^{u}$", "$options": "i"}}))
             spotlight = {"username": u, "score": t_score, "rank_name": r_name, "all_stats": [{"mode": x['gamemode'], "tier": x['tier']} for x in p_data]}
-
         if search_q and search_q not in u.lower(): continue
         if mode_q and mode_q not in data["kits"]: continue
-        
         processed.append(entry)
         if r_name in ["Grandmaster", "Legend"]: high_results.append(entry)
 
     processed = sorted(processed, key=lambda x: x['sort_val'], reverse=True)
     high_results = sorted(high_results, key=lambda x: x['total_score'], reverse=True)
 
-    return render_template_string(HTML_TEMPLATE, 
-                                 players=processed, 
-                                 high_results=high_results, 
-                                 spotlight=spotlight, 
-                                 all_modes=MODES, 
-                                 cur_mode=mode_q, 
-                                 search_q=search_q,
-                                 maintenance_active=m_stat['active'],
-                                 maintenance_reason=m_stat['reason'])
+    return render_template_string(HTML_TEMPLATE, players=processed, high_results=high_results, spotlight=spotlight, all_modes=MODES, cur_mode=mode_q, search_q=search_q, maintenance_active=m_stat['active'], maintenance_reason=m_stat['reason'])
 
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
