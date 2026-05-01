@@ -1,6 +1,6 @@
 """
-MAGMATIERS INTEGRATED SYSTEM - VERSION 4.1
-Restored Reason text to notifications. Text-only format, Profiles, and Maintenance.
+MAGMATIERS INTEGRATED SYSTEM - VERSION 4.2
+Added Retire/Unretire/Ban/Unban. Restored Maintenance, Profiles, and Reason text.
 """
 
 import discord
@@ -89,11 +89,16 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         return await interaction.response.send_message("❌ Permissions required.", ephemeral=True)
     
     if get_maintenance_status()['active']:
-        return await interaction.response.send_message("🛠️ System is currently under maintenance.", ephemeral=True)
+        return await interaction.response.send_message("🛠️ Under maintenance.", ephemeral=True)
+
+    # Check for Ban
+    existing_ban = db_manager.players.find_one({"username": player, "banned": True})
+    if existing_ban:
+        return await interaction.response.send_message(f"❌ **{player}** is banned from the rankings.", ephemeral=True)
 
     tier_upper = tier.upper().strip()
     if tier_upper not in TIER_ORDER:
-        return await interaction.response.send_message("❌ Invalid tier format.", ephemeral=True)
+        return await interaction.response.send_message("❌ Invalid tier.", ephemeral=True)
 
     old_record = db_manager.players.find_one({"username": player, "gamemode": mode.value})
     action = "promoted"
@@ -105,35 +110,67 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     db_manager.players.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {
-            "tier": tier_upper, 
-            "region": region.value, 
-            "discord_id": discord_user.id, 
-            "last_updated": datetime.datetime.utcnow(),
-            "retired": False
+            "tier": tier_upper, "region": region.value, "discord_id": discord_user.id, 
+            "last_updated": datetime.datetime.utcnow(), "retired": False, "banned": False
         }},
         upsert=True
     )
 
-    # --- TEXT-ONLY NOTIFICATION WITH REASON ---
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
-        msg_content = (
-            f"{discord_user.mention}\n"
-            f"**{player}** {action} to **{tier_upper}** in **{mode.value}**\n"
-            f"**Reason:** {reason}"
-        )
-        await log_chan.send(content=msg_content)
+        await log_chan.send(content=f"{discord_user.mention}\n**{player}** {action} to **{tier_upper}** in **{mode.value}**\n**Reason:** {reason}")
 
-    await interaction.response.send_message(f"✅ Successfully updated **{player}**.", ephemeral=True)
+    await interaction.response.send_message(f"✅ Updated **{player}**.", ephemeral=True)
+
+@bot.tree.command(name="retire", description="Mark a player as retired in a gamemode")
+@app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
+async def retire(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str]):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("❌ Permissions required.", ephemeral=True)
+
+    res = db_manager.players.update_one({"username": player, "gamemode": mode.value}, {"$set": {"retired": True}})
+    if res.matched_count == 0:
+        return await interaction.response.send_message(f"❌ No ranking found for **{player}** in **{mode.value}**.", ephemeral=True)
+
+    log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
+    if log_chan:
+        await log_chan.send(content=f"**{player}** has retired in **{mode.value}**")
+    
+    await interaction.response.send_message(f"✅ **{player}** retired from **{mode.value}**.", ephemeral=True)
+
+@bot.tree.command(name="unretire", description="Restore a retired player")
+@app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
+async def unretire(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str]):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("❌ Permissions required.", ephemeral=True)
+
+    db_manager.players.update_one({"username": player, "gamemode": mode.value}, {"$set": {"retired": False}})
+    await interaction.response.send_message(f"✅ **{player}** unretired in **{mode.value}**.", ephemeral=True)
+
+@bot.tree.command(name="ban", description="Ban a player from the rankings")
+async def ban(interaction: discord.Interaction, player: str, reason: str = "Violation of terms"):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+
+    db_manager.players.update_many({"username": player}, {"$set": {"banned": True, "retired": True}})
+    await interaction.response.send_message(f"🚫 **{player}** has been banned. Reason: {reason}")
+
+@bot.tree.command(name="unban", description="Unban a player")
+async def unban(interaction: discord.Interaction, player: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+
+    db_manager.players.update_many({"username": player}, {"$set": {"banned": False, "retired": False}})
+    await interaction.response.send_message(f"✅ **{player}** has been unbanned.")
 
 @bot.tree.command(name="maintenance", description="Toggle maintenance mode")
 async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Routine Maintenance"):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
     db_manager.settings.update_one({"_id": "maintenance_mode"}, {"$set": {"active": active, "reason": reason}}, upsert=True)
-    await interaction.response.send_message(f"🛠️ Maintenance mode has been **{'ENABLED' if active else 'DISABLED'}**.")
+    await interaction.response.send_message(f"🛠️ Maintenance mode **{'ENABLED' if active else 'DISABLED'}**.")
 
-# --- WEB UI ---
+# --- WEB UI (Excluding Retired/Banned from list) ---
 app = Flask(__name__)
 
 HTML_TEMPLATE = """
@@ -170,11 +207,7 @@ HTML_TEMPLATE = """
 </head>
 <body>
     {% if maintenance_active %}
-    <div class="maint-container">
-        <h1 style="font-size:3rem;">🛠️</h1>
-        <h1>Under Maintenance</h1>
-        <p style="color:var(--dim);">{{ maintenance_reason }}</p>
-    </div>
+    <div class="maint-container"><h1>🛠️ Under Maintenance</h1><p>{{ maintenance_reason }}</p></div>
     {% else %}
     <div class="header">
         <a href="/" class="logo">Magma<span>TIERS</span></a>
@@ -244,7 +277,9 @@ def index():
     m_stat = get_maintenance_status()
     mode_q = request.args.get('mode', '').strip().lower()
     search_q = request.args.get('search', '').strip().lower()
-    raw = list(db_manager.players.find({"retired": {"$ne": True}}))
+    
+    # Filter out retired or banned entries
+    raw = list(db_manager.players.find({"retired": {"$ne": True}, "banned": {"$ne": True}}))
     users = {}
     for r in raw:
         u = r['username']
@@ -265,7 +300,7 @@ def index():
             "sort_val": get_tier_value(data["kits"].get(mode_q)) if mode_q else t_score
         }
         if search_q and search_q.lower() == u.lower():
-            p_data = list(db_manager.players.find({"username": {"$regex": f"^{u}$", "$options": "i"}}))
+            p_data = list(db_manager.players.find({"username": {"$regex": f"^{u}$", "$options": "i"}, "retired": {"$ne": True}}))
             spotlight = {"username": u, "score": t_score, "rank_name": r_name, "all_stats": [{"mode": x['gamemode'], "tier": x['tier']} for x in p_data]}
         if search_q and search_q not in u.lower(): continue
         if mode_q and mode_q not in data["kits"]: continue
