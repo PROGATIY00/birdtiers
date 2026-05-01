@@ -1,16 +1,15 @@
 """
-MAGMATIERS INTEGRATED SYSTEM - VERSION 3.2
-Restored all features with updated PyMongo safety checks.
+MAGMATIERS INTEGRATED SYSTEM - VERSION 3.3
+Restored all features, fixed PyMongo NoneType errors, and added COLORED REGIONS.
 """
 
 import discord
 from discord import app_commands
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request
 from pymongo import MongoClient
 import os
 import threading
 import datetime
-import sys
 import logging
 
 # --- SYSTEM LOGGING ---
@@ -66,7 +65,7 @@ def get_global_rank_name(tier_list):
     return "Bronze"
 
 def get_maintenance_status():
-    if db_manager.db is None: # FIXED: Explicit check
+    if db_manager.db is None:
         return {"active": True, "reason": "Database connection lost.", "duration": "N/A"}
     status = db_manager.settings.find_one({"_id": "maintenance_mode"})
     return status if status else {"active": False, "reason": "None", "duration": "Unknown"}
@@ -120,21 +119,21 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 
     await interaction.response.send_message(f"✅ Updated **{player}** to {tier_upper}.", ephemeral=True)
 
-@bot.tree.command(name="maintenance", description="Toggle site maintenance")
+@bot.tree.command(name="maintenance")
 async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Updates"):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
     db_manager.settings.update_one({"_id": "maintenance_mode"}, {"$set": {"active": active, "reason": reason}}, upsert=True)
     await interaction.response.send_message(f"🛠️ Maintenance is now {'ENABLED' if active else 'DISABLED'}.")
 
-# --- WEB UI & FLASK ---
+# --- WEB UI ---
 app = Flask(__name__)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MagmaTIERS | Official Leaderboard</title>
+    <title>MagmaTIERS | Leaderboard</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;800&display=swap');
         :root { --bg: #0b0c10; --card: #14171f; --border: #262932; --accent: #ff4500; --text: #f0f2f5; --dim: #9ba3af; }
@@ -150,6 +149,11 @@ HTML_TEMPLATE = """
         .player-row:hover { border-color: var(--accent); transform: translateY(-2px); }
         .pos { font-size: 1.3rem; font-weight: 800; color: var(--accent); }
         .badge { background: rgba(255, 69, 0, 0.1); color: var(--accent); font-size: 0.7rem; font-weight: 800; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--accent); text-transform: uppercase; }
+        
+        /* Colored Regions */
+        .reg-na { color: #4ade80; } .reg-eu { color: #60a5fa; } .reg-asia { color: #f87171; }
+        .reg-oc { color: #fbbf24; } .reg-af { color: #a78bfa; } .reg-sa { color: #2dd4bf; }
+        
         .modal-bg { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); display:flex; justify-content:center; align-items:center; z-index:2000; backdrop-filter: blur(5px); }
         .modal { background: #11141c; width: 400px; padding: 40px; border-radius: 20px; border: 1px solid #2d3647; text-align: center; position: relative; }
         .close { position: absolute; top: 15px; right: 20px; font-size: 2rem; cursor: pointer; color: var(--dim); }
@@ -174,7 +178,6 @@ HTML_TEMPLATE = """
             <img src="https://minotar.net/helm/{{spotlight.username}}/100.png" style="margin-bottom:15px;">
             <h2 style="margin:0;">{{ spotlight.username }}</h2>
             <div style="margin: 10px 0;"><span class="badge">{{ spotlight.rank_name }}</span></div>
-            <p style="color:var(--dim);">Power Score: {{ spotlight.score }}</p>
             <div class="stat-grid">
                 {% for s in spotlight.all_stats %}
                 <div class="stat-box">
@@ -196,7 +199,7 @@ HTML_TEMPLATE = """
                 <span style="font-weight:700;">{{ p.username }}</span> <span class="badge" style="margin-left:5px;">{{ p.rank_name }}</span>
                 <div style="font-size:0.8rem; color:var(--dim);">Score: {{ p.total_score }}</div>
             </div>
-            <div style="color:#4ade80; font-weight:600;">{{ p.region }}</div>
+            <div class="reg-{{ p.region|lower }}" style="font-weight:700;">{{ p.region }}</div>
             <div style="text-align:right; font-weight:800; color:var(--accent); font-size:1.4rem;">{{ p.display_tier }}</div>
         </a>
         {% endfor %}
@@ -207,8 +210,8 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    if db_manager.db is None: # FIXED: Explicit check
-        return "Database Error. Ensure MONGO_URI is correct.", 500
+    if db_manager.db is None:
+        return "Database Error.", 500
     
     m_stat = get_maintenance_status()
     if m_stat['active']:
