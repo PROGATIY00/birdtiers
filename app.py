@@ -1,6 +1,6 @@
 """
-MAGMATIERS INTEGRATED SYSTEM - VERSION 3.4
-Restored classic tier notification with Discord mentions and colored regions.
+MAGMATIERS INTEGRATED SYSTEM - VERSION 3.6
+Fixed PyMongo 'is None' checks, Colored Regions, Promo/Demo Messages, and HIGH RESULTS Spotlight.
 """
 
 import discord
@@ -98,7 +98,16 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     if tier_upper not in TIER_ORDER:
         return await interaction.response.send_message("❌ Invalid tier format.", ephemeral=True)
 
-    # Database Update
+    old_record = db_manager.players.find_one({"username": player, "gamemode": mode.value})
+    action = "updated"
+    if old_record:
+        old_val = get_tier_value(old_record['tier'])
+        new_val = get_tier_value(tier_upper)
+        if new_val > old_val: action = "promoted"
+        elif new_val < old_val: action = "demoted"
+    else:
+        action = "promoted"
+
     db_manager.players.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {
@@ -111,35 +120,24 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         upsert=True
     )
 
-    # --- OLD TIER MESSAGE STYLE ---
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
         embed = discord.Embed(
             title="🏆 Tier Registry Update", 
-            color=0xff4500, 
+            color=0x4ade80 if action == "promoted" else 0xf87171 if action == "demoted" else 0x60a5fa, 
             timestamp=datetime.datetime.utcnow()
         )
         embed.description = (
-            f"**{player}** has been ranked as **{tier_upper}** in **{mode.value}**!\n\n"
+            f"**{player}** has been **{action}** to **{tier_upper} {mode.value}**\n\n"
             f"👤 **User:** {discord_user.mention}\n"
             f"🌍 **Region:** {region.value}\n"
             f"📝 **Reason:** {reason}\n"
             f"🛡️ **Tester:** {interaction.user.mention}"
         )
         embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-        embed.set_footer(text="Official MagmaTIERS Registry")
-        
-        # Mentioning the user outside the embed or inside the content
-        await log_chan.send(content=f"Congratulations {discord_user.mention}!", embed=embed)
+        await log_chan.send(content=f"{discord_user.mention}", embed=embed)
 
-    await interaction.response.send_message(f"✅ Successfully updated **{player}**.", ephemeral=True)
-
-@bot.tree.command(name="maintenance")
-async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Updates"):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-    db_manager.settings.update_one({"_id": "maintenance_mode"}, {"$set": {"active": active, "reason": reason}}, upsert=True)
-    await interaction.response.send_message(f"🛠️ Maintenance is now {'ENABLED' if active else 'DISABLED'}.")
+    await interaction.response.send_message(f"✅ Successfully {action} **{player}**.", ephemeral=True)
 
 # --- WEB UI ---
 app = Flask(__name__)
@@ -160,58 +158,54 @@ HTML_TEMPLATE = """
         .nav-btn { padding: 6px 15px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); color: var(--dim); text-decoration: none; font-size: 0.9rem; }
         .nav-btn.active { border-color: var(--accent); color: white; }
         .container { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+        
+        /* High Results Styling */
+        .high-results { background: rgba(255, 69, 0, 0.05); border: 2px solid var(--accent); border-radius: 15px; padding: 20px; margin-bottom: 30px; }
+        .high-title { color: var(--accent); font-weight: 800; text-transform: uppercase; margin-bottom: 15px; font-size: 0.9rem; letter-spacing: 1px; }
+
         .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; margin-bottom: 0.8rem; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
         .player-row:hover { border-color: var(--accent); transform: translateY(-2px); }
         .pos { font-size: 1.3rem; font-weight: 800; color: var(--accent); }
         .badge { background: rgba(255, 69, 0, 0.1); color: var(--accent); font-size: 0.7rem; font-weight: 800; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--accent); text-transform: uppercase; }
         
-        /* Colored Regions */
         .reg-na { color: #4ade80; } .reg-eu { color: #60a5fa; } .reg-asia { color: #f87171; }
         .reg-oc { color: #fbbf24; } .reg-af { color: #a78bfa; } .reg-sa { color: #2dd4bf; }
-        
-        .modal-bg { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); display:flex; justify-content:center; align-items:center; z-index:2000; backdrop-filter: blur(5px); }
-        .modal { background: #11141c; width: 400px; padding: 40px; border-radius: 20px; border: 1px solid #2d3647; text-align: center; position: relative; }
-        .close { position: absolute; top: 15px; right: 20px; font-size: 2rem; cursor: pointer; color: var(--dim); }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; max-height: 200px; overflow-y: auto; }
-        .stat-box { background: #1a1d26; padding: 10px; border-radius: 8px; border: 1px solid var(--border); }
     </style>
 </head>
 <body>
     <div class="header">
         <a href="/" class="logo">Magma<span>TIERS</span></a>
-        <form><input type="text" name="search" placeholder="Search player..." style="background:var(--bg); border:1px solid var(--border); padding:8px 15px; border-radius:20px; color:white;" value="{{ search_q }}"></form>
+        <form><input type="text" name="search" placeholder="Search..." style="background:var(--bg); border:1px solid var(--border); padding:8px 15px; border-radius:20px; color:white;" value="{{ search_q }}"></form>
     </div>
     <div class="nav-strip">
         <a href="/" class="nav-btn {% if not cur_mode %}active{% endif %}">GLOBAL</a>
         {% for m in all_modes %}<a href="/?mode={{m}}" class="nav-btn {% if cur_mode == m %}active{% endif %}">{{m|upper}}</a>{% endfor %}
     </div>
 
-    {% if spotlight %}
-    <div class="modal-bg">
-        <div class="modal">
-            <span class="close" onclick="window.location.href='/'">&times;</span>
-            <img src="https://minotar.net/helm/{{spotlight.username}}/100.png" style="margin-bottom:15px;">
-            <h2 style="margin:0;">{{ spotlight.username }}</h2>
-            <div style="margin: 10px 0;"><span class="badge">{{ spotlight.rank_name }}</span></div>
-            <div class="stat-grid">
-                {% for s in spotlight.all_stats %}
-                <div class="stat-box">
-                    <div style="font-size:0.7rem; color:var(--accent);">{{ s.mode|upper }}</div>
-                    <div style="font-weight:700;">{{ s.tier }}</div>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-    </div>
-    {% endif %}
-
     <div class="container">
+        {% if high_results and not cur_mode and not search_q %}
+        <div class="high-results">
+            <div class="high-title">🔥 High Results (Grandmaster & Legend)</div>
+            {% for p in high_results %}
+            <a href="/?search={{p.username}}" class="player-row" style="border-color: gold;">
+                <div class="pos">⭐</div>
+                <img src="https://minotar.net/helm/{{p.username}}/48.png" style="border-radius:6px;">
+                <div>
+                    <span style="font-weight:700;">{{ p.username }}</span> <span class="badge">{{ p.rank_name }}</span>
+                </div>
+                <div class="reg-{{ p.region|lower }}" style="font-weight:700;">{{ p.region }}</div>
+                <div style="text-align:right; font-weight:800; color:var(--accent); font-size:1.4rem;">{{ p.display_tier }}</div>
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+
         {% for p in players %}
         <a href="/?search={{p.username}}{% if cur_mode %}&mode={{cur_mode}}{% endif %}" class="player-row">
             <div class="pos">#{{ loop.index }}</div>
             <img src="https://minotar.net/helm/{{p.username}}/48.png" style="border-radius:6px;">
             <div>
-                <span style="font-weight:700;">{{ p.username }}</span> <span class="badge" style="margin-left:5px;">{{ p.rank_name }}</span>
+                <span style="font-weight:700;">{{ p.username }}</span> <span class="badge">{{ p.rank_name }}</span>
                 <div style="font-size:0.8rem; color:var(--dim);">Score: {{ p.total_score }}</div>
             </div>
             <div class="reg-{{ p.region|lower }}" style="font-weight:700;">{{ p.region }}</div>
@@ -225,13 +219,8 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    if db_manager.db is None:
-        return "Database Error.", 500
+    if db_manager.db is None: return "Database Error.", 500
     
-    m_stat = get_maintenance_status()
-    if m_stat['active']:
-        return f"<body style='background:#0b0c10;color:white;text-align:center;padding:50px;'><h1>🛠️ Maintenance</h1><p>{m_stat['reason']}</p></body>"
-
     mode_q = request.args.get('mode', '').strip().lower()
     search_q = request.args.get('search', '').strip().lower()
     
@@ -244,41 +233,30 @@ def index():
         users[u]["kits"][r['gamemode'].lower()] = r['tier']
 
     processed = []
+    high_results = []
+
     for u, data in users.items():
         t_score = calculate_player_score(data["tiers"])
         r_name = get_global_rank_name(data["tiers"])
+        best_tier = max(data["tiers"], key=lambda t: get_tier_value(t))
+
+        entry = {
+            "username": u, "display_tier": data["kits"].get(mode_q, best_tier) if mode_q else best_tier,
+            "total_score": t_score, "rank_name": r_name, "region": data['region'],
+            "sort_val": get_tier_value(data["kits"].get(mode_q)) if mode_q else t_score
+        }
+
+        if search_q and search_q not in u.lower(): continue
+        if mode_q and mode_q not in data["kits"]: continue
         
-        if mode_q:
-            if mode_q in data["kits"]:
-                processed.append({
-                    "username": u, "display_tier": data["kits"][mode_q],
-                    "total_score": t_score, "rank_name": r_name, "region": data['region'],
-                    "sort_val": get_tier_value(data["kits"][mode_q])
-                })
-        else:
-            best = max(data["tiers"], key=lambda t: get_tier_value(t))
-            processed.append({
-                "username": u, "display_tier": best,
-                "total_score": t_score, "rank_name": r_name, "region": data['region'],
-                "sort_val": t_score
-            })
+        processed.append(entry)
+        if r_name in ["Grandmaster", "Legend"]: high_results.append(entry)
 
     processed = sorted(processed, key=lambda x: x['sort_val'], reverse=True)
-    
-    spotlight = None
-    if search_q:
-        p_data = list(db_manager.players.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}}))
-        if p_data:
-            stiers = [x['tier'] for x in p_data]
-            spotlight = {
-                "username": p_data[0]['username'], "score": calculate_player_score(stiers),
-                "rank_name": get_global_rank_name(stiers),
-                "all_stats": [{"mode": x['gamemode'], "tier": x['tier']} for x in p_data]
-            }
+    high_results = sorted(high_results, key=lambda x: x['total_score'], reverse=True)
 
-    return render_template_string(HTML_TEMPLATE, players=processed, all_modes=MODES, cur_mode=mode_q, search_q=search_q, spotlight=spotlight)
+    return render_template_string(HTML_TEMPLATE, players=processed, high_results=high_results, all_modes=MODES, cur_mode=mode_q, search_q=search_q)
 
-# --- STARTUP ---
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
     bot.run(TOKEN)
