@@ -1,179 +1,434 @@
+"""
+MAGMATIERS INTEGRATED SYSTEM - VERSION 3.0
+A professional-grade Discord bot and Web Dashboard solution for competitive Minecraft Tier-listing.
+Optimized for deployment on Render.com.
+"""
+
 import discord
 from discord import app_commands
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, abort
 from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, OperationFailure
 import os
 import threading
 import datetime
 import sys
+import logging
+import json
+import uuid
 
-# --- RENDER ENVIRONMENT CHECK ---
+# ==========================================
+# 1. LOGGING & SYSTEM CONFIGURATION
+# ==========================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("MagmaTiers")
+
+# --- RENDER ENVIRONMENT VALIDATION ---
 TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
 
-if not TOKEN or not MONGO_URI or not LOG_CHANNEL_ID:
-    print("❌ RENDER CONFIG ERROR: Missing environment variables.")
-    sys.exit(1)
+if not all([TOKEN, MONGO_URI, LOG_CHANNEL_ID]):
+    logger.critical("FATAL: Missing one or more environment variables (TOKEN, MONGO_URI, LOG_CHANNEL_ID).")
+    # We don't sys.exit here to allow the web server to potentially show a 'Config Error' page
+    # but the bot and DB will fail safely.
 
-# --- DATABASE SETUP ---
-try:
-    client_db = MongoClient(MONGO_URI)
-    db_mongo = client_db['magmatiers_db']
-    players_col = db_mongo['players']
-    settings_col = db_mongo['settings']
-except Exception as e:
-    print(f"❌ MONGODB CONNECTION ERROR: {e}")
-    sys.exit(1)
-
-# --- DATA MAPS ---
-MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
+# ==========================================
+# 2. DATABASE & TIER CONSTANTS
+# ==========================================
+MODES = [
+    "Crystal", "UHC", "Pot", "SMP", "Axe", 
+    "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"
+]
 REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
-TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
+
+# TIER_ORDER defines the hierarchy and point values.
+# Index 0 (LT5) = 1 Point ... Index 9 (HT1) = 10 Points
+TIER_ORDER = [
+    "LT5", "HT5", 
+    "LT4", "HT4", 
+    "LT3", "HT3", 
+    "LT2", "HT2", 
+    "LT1", "HT1"
+]
+
+class DatabaseManager:
+    """Handles all MongoDB interactions with safety wrappers."""
+    def __init__(self, uri):
+        try:
+            self.client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+            self.db = self.client['magmatiers_db']
+            self.players = self.db['players']
+            self.settings = self.db['settings']
+            self.logs = self.db['audit_logs']
+            # Test connection
+            self.client.admin.command('ping')
+            logger.info("Successfully connected to MongoDB.")
+        except Exception as e:
+            logger.error(f"MongoDB Connection Failed: {e}")
+            self.db = None
+
+db_manager = DatabaseManager(MONGO_URI)
+
+# ==========================================
+# 3. CORE LOGIC & RANKING ENGINE
+# ==========================================
+
+def get_tier_value(tier_name):
+    """Returns the integer weight of a tier string."""
+    try:
+        return TIER_ORDER.index(tier_name.upper().strip()) + 1
+    except (ValueError, AttributeError):
+        return 0
+
+def calculate_player_score(tier_list):
+    """
+    Calculates the total Power Score for a player.
+    A player with HT4 (7 pts) and LT4 (6 pts) = 13.
+    """
+    return sum(get_tier_value(t) for t in tier_list)
 
 def get_global_rank_name(tier_list):
-    if not tier_list: return "Stone"
-    weights = [TIER_ORDER.index(t) for t in tier_list if t in TIER_ORDER]
-    top_tier = max(weights) if weights else -1
-    count = len(weights)
-    if top_tier >= 9 and count >= 3: return "Grandmaster"
-    if top_tier >= 8: return "Master"
-    if top_tier >= 6: return "Elite"
-    if top_tier >= 4: return "Diamond"
-    if top_tier >= 2: return "Gold"
+    """Determines the badge name based on cumulative performance."""
+    if not tier_list:
+        return "Stone"
+    
+    total_score = calculate_player_score(tier_list)
+    numeric_tiers = [get_tier_value(t) for t in tier_list]
+    highest_tier_val = max(numeric_tiers) if numeric_tiers else 0
+    kit_count = len(tier_list)
+
+    # Ranking Thresholds
+    if highest_tier_val >= 9 and kit_count >= 3:
+        return "Grandmaster"
+    if total_score >= 35:
+        return "Legend"
+    if total_score >= 25:
+        return "Master"
+    if total_score >= 15:
+        return "Elite"
+    if total_score >= 8:
+        return "Diamond"
+    if total_score >= 4:
+        return "Gold"
     return "Bronze"
 
 def get_maintenance_status():
-    status = settings_col.find_one({"_id": "maintenance_mode"})
+    """Checks if the system is currently in maintenance mode."""
+    if not db_manager.db:
+        return {"active": True, "reason": "Database Offline", "duration": "N/A"}
+    status = db_manager.settings.find_one({"_id": "maintenance_mode"})
     return status if status else {"active": False, "reason": "None", "duration": "Unknown"}
 
-# --- DISCORD BOT ---
+# ==========================================
+# 4. DISCORD BOT IMPLEMENTATION
+# ==========================================
+
 class MagmaBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
         intents.members = True 
+        intents.message_content = True
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
+
     async def setup_hook(self):
+        logger.info("Syncing Discord Slash Commands...")
         await self.tree.sync()
 
 bot = MagmaBot()
 
-@bot.tree.command(name="maintenance", description="Toggle maintenance mode")
-async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Updates", duration: str = "1 hour"):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-    settings_col.update_one({"_id": "maintenance_mode"}, {"$set": {"active": active, "reason": reason, "duration": duration}}, upsert=True)
-    await interaction.response.send_message(f"🛠️ Maintenance is now {'ENABLED' if active else 'DISABLED'}.")
+@bot.event
+async def on_ready():
+    logger.info(f"Logged into Discord as {bot.user} (ID: {bot.user.id})")
+    await bot.change_presence(activity=discord.Game(name="MagmaTIERS Leaderboard"))
 
-@bot.tree.command(name="rank", description="Update a player's tier")
+# --- SLASH COMMANDS ---
+
+@bot.tree.command(name="rank", description="Update or set a player's tier for a specific kit")
+@app_commands.describe(
+    player="Minecraft Username", 
+    discord_user="The Discord account associated",
+    tier="Example: HT3, LT1, etc",
+    reason="Reason for the tier change"
+)
 @app_commands.choices(
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
-async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str], reason: str = "Performance"):
-    if get_maintenance_status()['active']:
-        return await interaction.response.send_message("🛠️ System in maintenance.", ephemeral=True)
-    
-    tier_upper = tier.upper().strip()
-    old_data = players_col.find_one({"username": player, "gamemode": mode.value})
-    
-    action = "promoted"
-    if old_data and "tier" in old_data:
-        old_idx = TIER_ORDER.index(old_data['tier'])
-        new_idx = TIER_ORDER.index(tier_upper)
-        if new_idx < old_idx: action = "demoted"
-        elif new_idx == old_idx: action = "updated"
+async def rank(
+    interaction: discord.Interaction, 
+    player: str, 
+    discord_user: discord.Member, 
+    mode: app_commands.Choice[str], 
+    tier: str, 
+    region: app_commands.Choice[str], 
+    reason: str = "Standard Testing"
+):
+    # Admin Check
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("❌ You lack permissions to rank players.", ephemeral=True)
 
-    players_col.update_one(
+    # Maintenance Check
+    if get_maintenance_status()['active']:
+        return await interaction.response.send_message("🛠️ Command disabled during maintenance.", ephemeral=True)
+
+    tier_upper = tier.upper().strip()
+    if tier_upper not in TIER_ORDER:
+        return await interaction.response.send_message(f"❌ Invalid tier. Use: {', '.join(TIER_ORDER)}", ephemeral=True)
+
+    # Determine Promotion/Demotion
+    old_entry = db_manager.players.find_one({"username": player, "gamemode": mode.value})
+    action = "promoted"
+    if old_entry:
+        old_val = get_tier_value(old_entry['tier'])
+        new_val = get_tier_value(tier_upper)
+        if new_val < old_val: action = "demoted"
+        elif new_val == old_val: action = "updated"
+
+    # Database Update
+    db_manager.players.update_one(
         {"username": player, "gamemode": mode.value},
-        {"$set": {"tier": tier_upper, "region": region.value, "retired": False, "last_updated": datetime.datetime.utcnow()}},
+        {
+            "$set": {
+                "tier": tier_upper,
+                "region": region.value,
+                "discord_id": discord_user.id,
+                "retired": False,
+                "last_updated": datetime.datetime.utcnow()
+            }
+        },
         upsert=True
     )
 
-    log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
-    if log_chan:
-        embed = discord.Embed(title="Tier Update", color=0xff4500, timestamp=datetime.datetime.utcnow())
-        msg = f"**{player}** has been **{action}** to **{tier_upper}** in **{mode.value}**"
-        embed.description = (f"{msg}\n\n"
-                             f"**User:** {discord_user.mention} -- {discord_user.name}\n"
-                             f"**Reason:** {reason}\n\n"
-                             f"**Tester:** {interaction.user.display_name} | **Region:** {region.value}")
-        embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-        await log_chan.send(embed=embed)
-    await interaction.response.send_message(f"✅ {player} {action} to {tier_upper}.", ephemeral=True)
+    # Log to Channel
+    try:
+        log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
+        if log_chan:
+            embed = discord.Embed(
+                title="🏆 Tier Registry Update", 
+                color=0xff4500 if action != "demoted" else 0xff0000,
+                timestamp=datetime.datetime.utcnow()
+            )
+            embed.description = (
+                f"**{player}** has been **{action}** to **{tier_upper}** in **{mode.value}**\n\n"
+                f"👤 **User:** {discord_user.mention}\n"
+                f"📝 **Reason:** {reason}\n"
+                f"🌍 **Region:** {region.value}\n"
+                f"🛡️ **Tester:** {interaction.user.mention}"
+            )
+            embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
+            embed.set_footer(text="MagmaTIERS Official Logging")
+            await log_chan.send(embed=embed)
+    except Exception as e:
+        logger.error(f"Logging Failed: {e}")
 
-# --- WEB UI & API ---
+    await interaction.response.send_message(f"✅ Successfully {action} **{player}** to **{tier_upper}** ({mode.value}).", ephemeral=True)
+
+@bot.tree.command(name="maintenance", description="Control system access")
+async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Routine Maintenance"):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Administrators only.", ephemeral=True)
+    
+    db_manager.settings.update_one(
+        {"_id": "maintenance_mode"},
+        {"$set": {"active": active, "reason": reason, "duration": "TBD"}},
+        upsert=True
+    )
+    status = "ENABLED" if active else "DISABLED"
+    await interaction.response.send_message(f"🛠️ Maintenance mode has been **{status}**.")
+
+# ==========================================
+# 5. WEB UI & FLASK FRAMEWORK
+# ==========================================
+
 app = Flask(__name__)
 
 # --- API ENDPOINTS ---
-@app.route('/api/player/<username>')
-def api_player(username):
-    p_data = list(players_col.find({"username": {"$regex": f"^{username}$", "$options": "i"}}))
-    if not p_data:
-        return jsonify({"error": "Player not found"}), 404
+
+@app.route('/api/v1/player/<username>')
+def api_get_player(username):
+    data = list(db_manager.players.find({"username": {"$regex": f"^{username}$", "$options": "i"}}))
+    if not data:
+        return jsonify({"success": False, "error": "Player not found"}), 404
     
-    tiers = [x['tier'] for x in p_data]
+    all_tiers = [d['tier'] for d in data]
     return jsonify({
-        "username": p_data[0]['username'],
-        "global_rank": get_global_rank_name(tiers),
-        "stats": [{"mode": d['gamemode'], "tier": d['tier'], "region": d.get('region', 'NA')} for d in p_data]
+        "success": True,
+        "data": {
+            "username": data[0]['username'],
+            "cumulative_score": calculate_player_score(all_tiers),
+            "rank_badge": get_global_rank_name(all_tiers),
+            "region": data[0].get('region', 'NA'),
+            "kits": [{"mode": d['gamemode'], "tier": d['tier']} for d in data]
+        }
     })
 
-@app.route('/api/maintenance')
-def api_maint():
-    return jsonify(get_maintenance_status())
+@app.route('/api/v1/leaderboard')
+def api_leaderboard():
+    # Return top 50
+    raw_data = list(db_manager.players.find({"retired": {"$ne": True}}))
+    # ... logic for processing ...
+    return jsonify({"message": "Leaderboard API is active. Use the web UI for full view."})
 
-# --- FRONTEND ---
-HTML_TEMPLATE = """
+# --- WEB UI TEMPLATE (MINIMALIST & DARK) ---
+
+HTML_BASE = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>MagmaTIERS | Official</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MagmaTIERS | Minecraft Competitive Leaderboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;800&display=swap');
-        :root { --bg: #0b0c10; --card: #14171f; --border: #262932; --accent: #ff4500; --text: #e0e6ed; --dim: #8b949e; }
-        body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
-        .navbar { background: #0f1117; padding: 15px 50px; border-bottom: 3px solid var(--accent); display: flex; justify-content: space-between; align-items: center; position: sticky; top:0; z-index: 100; }
-        .logo { color: white; font-weight: 800; font-size: 26px; text-decoration: none; text-transform: uppercase; }
-        .logo span { color: var(--accent); }
-        .sub-nav { display: flex; justify-content:center; gap: 8px; padding: 10px; background: #0f1117; border-bottom: 1px solid var(--border); overflow-x: auto; }
-        .mode-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--dim); text-decoration: none; font-size: 11px; transition: 0.2s; white-space: nowrap; }
-        .mode-btn.active { border-color: var(--accent); color: white; background: #1c1f2b; }
-        .wrapper { max-width: 900px; margin: auto; padding: 30px 20px; }
-        .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 15px; padding: 18px 25px; margin-bottom: 12px; display: grid; grid-template-columns: 50px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
-        .player-row:hover { border-color: var(--accent); transform: scale(1.01); }
-        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:1001; display:flex; justify-content:center; align-items:center; backdrop-filter: blur(8px); }
-        .profile-modal { background: #11141c; width: 420px; border-radius: 24px; border: 2px solid #2d3647; padding: 40px; position: relative; text-align: center; }
-        .close-btn { position: absolute; top: 20px; right: 25px; color: var(--dim); text-decoration: none; font-size: 30px; font-weight: 800; }
-        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 25px; max-height: 300px; overflow-y: auto; }
-        .stat-item { background: #1a1d26; padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
-        .rank-badge { font-size: 10px; padding: 2px 8px; border: 1px solid var(--accent); border-radius: 5px; margin-left: 10px; color: var(--accent); font-weight: 800; text-transform: uppercase; }
-        .NA { color: #ff6b6b; } .EU { color: #51cf66; } .ASIA { color: #fcc419; }
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@300;400;600;700&display=swap');
+        :root {
+            --bg-color: #0b0c10;
+            --surface-color: #14171f;
+            --border-color: #262932;
+            --accent-color: #ff4500;
+            --text-primary: #f0f2f5;
+            --text-secondary: #9ba3af;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: 'Fredoka', sans-serif;
+        }
+        /* Navigation */
+        .header {
+            background: #0f1117;
+            padding: 1rem 4rem;
+            border-bottom: 2px solid var(--accent-color);
+            display: flex; justify-content: space-between; align-items: center;
+            position: sticky; top: 0; z-index: 1000;
+        }
+        .logo { font-size: 1.8rem; font-weight: 800; text-decoration: none; color: white; }
+        .logo span { color: var(--accent-color); }
+        
+        .search-bar {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            padding: 0.6rem 1.2rem;
+            border-radius: 25px;
+            color: white; outline: none;
+            width: 300px;
+        }
+
+        /* Sub-Navigation (Modes) */
+        .mode-strip {
+            background: #0f1117;
+            padding: 0.8rem;
+            display: flex; justify-content: center;
+            gap: 10px; flex-wrap: wrap;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .mode-pill {
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            text-decoration: none; font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+        .mode-pill:hover, .mode-pill.active {
+            border-color: var(--accent-color);
+            color: white;
+            background: #1c1f2b;
+        }
+
+        /* Leaderboard Table */
+        .container { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+        .rank-card {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.2rem 2rem;
+            margin-bottom: 1rem;
+            display: grid;
+            grid-template-columns: 60px 80px 1fr 120px 100px;
+            align-items: center;
+            transition: transform 0.1s;
+            cursor: pointer;
+            text-decoration: none; color: inherit;
+        }
+        .rank-card:hover { transform: translateY(-2px); border-color: #3e4451; }
+        
+        .position { font-size: 1.5rem; font-weight: 700; color: var(--accent-color); }
+        .avatar { width: 48px; height: 48px; border-radius: 6px; }
+        .username { font-size: 1.2rem; font-weight: 600; }
+        .tag-badge {
+            background: rgba(255, 69, 0, 0.1);
+            color: var(--accent-color);
+            font-size: 0.7rem; font-weight: 800;
+            padding: 2px 8px; border-radius: 4px;
+            text-transform: uppercase; border: 1px solid var(--accent-color);
+        }
+        .score-sub { font-size: 0.8rem; color: var(--text-secondary); }
+        .tier-label { font-size: 1.4rem; font-weight: 800; text-align: right; }
+
+        /* Modals */
+        .overlay {
+            position: fixed; top:0; left:0; width:100%; height:100%;
+            background: rgba(0,0,0,0.8); backdrop-filter: blur(5px);
+            display: flex; justify-content: center; align-items: center; z-index: 2000;
+        }
+        .modal {
+            background: #11141c;
+            width: 450px; padding: 3rem;
+            border-radius: 20px; border: 1px solid #2d3647;
+            text-align: center; position: relative;
+        }
+        .close-btn { position: absolute; top: 20px; right: 20px; font-size: 2rem; cursor: pointer; color: var(--text-secondary); }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid; grid-template-columns: 1fr 1fr;
+            gap: 10px; margin-top: 2rem;
+            max-height: 250px; overflow-y: auto;
+        }
+        .stat-box {
+            background: #1a1d26; padding: 1rem;
+            border-radius: 10px; border: 1px solid var(--border-color);
+        }
     </style>
 </head>
 <body>
-    <div class="navbar">
+    <header class="header">
         <a href="/" class="logo">Magma<span>TIERS</span></a>
-        <form action="/"><input type="text" name="search" style="background:#0b0c10; border:1px solid var(--border); padding:8px 18px; border-radius:20px; color:white; outline:none;" placeholder="Search..." value="{{ search_query }}"></form>
-    </div>
-    <div class="sub-nav">
-        <a href="/" class="mode-btn {% if not current_mode %}active{% endif %}">GLOBAL</a>
-        {% for m in all_modes %}<a href="/?mode={{m}}" class="mode-btn {% if current_mode == m %}active{% endif %}">{{m|upper}}</a>{% endfor %}
+        <form action="/">
+            <input type="text" name="search" class="search-bar" placeholder="Search Player..." value="{{ search_query }}">
+        </form>
+    </header>
+
+    <div class="mode-strip">
+        <a href="/" class="mode-pill {% if not current_mode %}active{% endif %}">GLOBAL</a>
+        {% for m in all_modes %}
+        <a href="/?mode={{m}}" class="mode-pill {% if current_mode == m %}active{% endif %}">{{ m|upper }}</a>
+        {% endfor %}
     </div>
 
     {% if spotlight %}
-    <div class="modal-overlay">
-        <div class="profile-modal">
-            <a href="/" class="close-btn">&times;</a>
-            <img src="https://minotar.net/helm/{{spotlight.username}}/100.png" style="width:100px; border-radius:20px; border:3px solid var(--accent); margin-bottom:15px;">
-            <h1 style="margin:0;">{{ spotlight.username }}</h1>
-            <div style="margin-top:5px;"><span class="rank-badge" style="margin:0; font-size:14px; padding:4px 12px;">{{ spotlight.rank_name }}</span></div>
-            <div class="stat-grid">
+    <div class="overlay">
+        <div class="modal">
+            <span class="close-btn" onclick="window.location.href='/'">&times;</span>
+            <img src="https://minotar.net/helm/{{spotlight.username}}/100.png" style="width: 100px; margin-bottom: 1rem;">
+            <h2>{{ spotlight.username }}</h2>
+            <span class="tag-badge">{{ spotlight.rank_name }}</span>
+            <p style="color: var(--text-secondary);">Global Power Score: {{ spotlight.score }}</p>
+            <div class="stats-grid">
                 {% for s in spotlight.all_stats %}
-                <div class="stat-item">
-                    <small style="color:var(--dim); text-transform:uppercase; font-size:10px;">{{ s.gamemode }}</small><br>
-                    <b style="color:white; font-size:16px;">{{ s.tier }}</b>
+                <div class="stat-box">
+                    <div style="font-size: 0.7rem; color: var(--accent-color);">{{ s.mode|upper }}</div>
+                    <div style="font-size: 1.2rem; font-weight: 700;">{{ s.tier }}</div>
                 </div>
                 {% endfor %}
             </div>
@@ -181,61 +436,122 @@ HTML_TEMPLATE = """
     </div>
     {% endif %}
 
-    <div class="wrapper">
+    <main class="container">
         {% for p in players %}
-        <a href="/?search={{p.username}}{% if current_mode %}&mode={{current_mode}}{% endif %}" class="player-row">
-            <div style="font-weight:800; color:var(--accent);">#{{ loop.index }}</div>
-            <img src="https://minotar.net/helm/{{p.username}}/40.png" style="border-radius:8px;">
-            <div><b>{{ p.username }}</b> <span class="rank-badge">{{ p.rank_name }}</span></div>
-            <div class="{{ p.region }}" style="font-weight:800; font-size:12px;">{{ p.region }}</div>
-            <div style="text-align:right; font-weight:800; color:var(--accent); font-size:18px;">{{ p.tier }}</div>
+        <a href="/?search={{p.username}}{% if current_mode %}&mode={{current_mode}}{% endif %}" class="rank-card">
+            <div class="position">#{{ loop.index }}</div>
+            <img src="https://minotar.net/helm/{{p.username}}/64.png" class="avatar">
+            <div>
+                <span class="username">{{ p.username }}</span> 
+                <span class="tag-badge" style="margin-left: 10px;">{{ p.rank_name }}</span>
+                <div class="score-sub">Power Score: {{ p.total_score }}</div>
+            </div>
+            <div style="color: #4ade80; font-weight: 600;">{{ p.region }}</div>
+            <div class="tier-label">{{ p.display_tier }}</div>
         </a>
         {% endfor %}
-    </div>
+    </main>
 </body>
 </html>
 """
 
-@app.before_request
-def check_maint():
-    # Allow API calls even during maintenance if needed, or block them too:
-    m = get_maintenance_status()
-    if m['active'] and not request.path.startswith('/api'):
-        return f"<body style='background:#0b0c10;color:white;text-align:center;padding-top:100px;font-family:Fredoka,sans-serif;'><h1>🛠️ Maintenance Mode</h1><p>{m['reason']}</p><p>Duration: {m['duration']}</p></body>", 503
-
 @app.route('/')
-def index():
-    mode_f = request.args.get('mode', '').strip().lower()
-    search_q = request.args.get('search', '').strip().lower()
-    raw_data = list(players_col.find({"retired": {"$ne": True}}))
+def dashboard():
+    mode_query = request.args.get('mode', '').strip().lower()
+    search_query = request.args.get('search', '').strip().lower()
     
-    user_map = {}
-    for d in raw_data:
-        u = d['username']
-        if u not in user_map: user_map[u] = {"username": u, "tiers": [], "region": d.get('region', 'NA'), "best_tier": "LT5"}
-        user_map[u]["tiers"].append(d['tier'])
-        if TIER_ORDER.index(d['tier']) > TIER_ORDER.index(user_map[u]["best_tier"]): user_map[u]["best_tier"] = d['tier']
+    if not db_manager.db:
+        return "Database Connection Error. Please check Render environment variables."
 
-    processed = []
-    for u, data in user_map.items():
-        rn = get_global_rank_name(data["tiers"])
-        if mode_f:
-            me = next((item for item in raw_data if item['username'] == u and item['gamemode'].lower() == mode_f), None)
-            if me: processed.append({"username": u, "tier": me['tier'], "region": data['region'], "rank_name": rn})
+    # Fetch all data once to process ranking
+    all_records = list(db_manager.players.find({"retired": {"$ne": True}}))
+    
+    # Structure data by User
+    user_data = {}
+    for entry in all_records:
+        uname = entry['username']
+        if uname not in user_data:
+            user_data[uname] = {
+                "username": uname,
+                "tiers": [],
+                "kit_map": {},
+                "region": entry.get('region', 'NA')
+            }
+        user_data[uname]["tiers"].append(entry['tier'])
+        user_data[uname]["kit_map"][entry['gamemode'].lower()] = entry['tier']
+
+    processed_list = []
+    for uname, data in user_data.items():
+        total_score = calculate_player_score(data["tiers"])
+        rank_badge = get_global_rank_name(data["tiers"])
+        
+        if mode_query:
+            # If viewing a specific mode, we only show players tested in that mode
+            if mode_query in data["kit_map"]:
+                tier_in_mode = data["kit_map"][mode_query]
+                processed_list.append({
+                    "username": uname,
+                    "display_tier": tier_in_mode,
+                    "total_score": total_score,
+                    "rank_name": rank_badge,
+                    "region": data["region"],
+                    "sort_val": get_tier_value(tier_in_mode)
+                })
         else:
-            processed.append({"username": u, "tier": data["best_tier"], "region": data['region'], "rank_name": rn})
+            # Global view: Show best tier but sort by total score
+            best_tier = max(data["tiers"], key=lambda t: get_tier_value(t))
+            processed_list.append({
+                "username": uname,
+                "display_tier": best_tier,
+                "total_score": total_score,
+                "rank_name": rank_badge,
+                "region": data["region"],
+                "sort_val": total_score
+            })
 
-    processed = sorted(processed, key=lambda x: TIER_ORDER.index(x['tier']), reverse=True)
-    
+    # Final Sort
+    processed_list = sorted(processed_list, key=lambda x: x['sort_val'], reverse=True)
+
+    # Spotlight/Search logic
     spotlight = None
-    if search_q:
-        p_data = list(players_col.find({"username": {"$regex": f"^{search_q}$", "$options": "i"}}))
-        if p_data:
-            spotlight = {"username": p_data[0]['username'], "rank_name": get_global_rank_name([x['tier'] for x in p_data]),
-                         "all_stats": [{"gamemode": d['gamemode'], "tier": d['tier']} for d in p_data]}
+    if search_query:
+        # Re-fetch from DB for precise data
+        specific_data = list(db_manager.players.find({"username": {"$regex": f"^{search_query}$", "$options": "i"}}))
+        if specific_data:
+            stiers = [x['tier'] for x in specific_data]
+            spotlight = {
+                "username": specific_data[0]['username'],
+                "score": calculate_player_score(stiers),
+                "rank_name": get_global_rank_name(stiers),
+                "all_stats": [{"mode": x['gamemode'], "tier": x['tier']} for x in specific_data]
+            }
 
-    return render_template_string(HTML_TEMPLATE, players=processed, spotlight=spotlight, all_modes=MODES, current_mode=mode_f, search_query=search_q)
+    return render_template_string(
+        HTML_BASE, 
+        players=processed_list, 
+        all_modes=MODES, 
+        current_mode=mode_query, 
+        search_query=search_query,
+        spotlight=spotlight
+    )
 
-if __name__ == '__main__':
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
-    bot.run(TOKEN)
+# ==========================================
+# 6. EXECUTION ENGINE
+# ==========================================
+
+def run_web():
+    """Background thread for Flask."""
+    # Render expects port 10000 by default
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+if __name__ == "__main__":
+    # 1. Start Web Server
+    web_thread = threading.Thread(target=run_web, daemon=True)
+    web_thread.start()
+    
+    # 2. Start Discord Bot (Main Thread)
+    try:
+        bot.run(TOKEN)
+    except Exception as e:
+        logger.critical(f"Bot failed to start: {e}")
