@@ -1,6 +1,6 @@
 """
-MAGMATIERS INTEGRATED SYSTEM - VERSION 3.9
-Removed Discord Embeds. Text-only notifications, Profile Modals, and High Results.
+MAGMATIERS INTEGRATED SYSTEM - VERSION 4.0
+Restored Maintenance Mode, Text Notifications, Profile Modals, and High Results.
 """
 
 import discord
@@ -64,6 +64,12 @@ def get_global_rank_name(tier_list):
     if total_score >= 8: return "Diamond"
     return "Bronze"
 
+def get_maintenance_status():
+    if db_manager.db is None:
+        return {"active": True, "reason": "Database connection lost."}
+    status = db_manager.settings.find_one({"_id": "maintenance_mode"})
+    return status if status else {"active": False, "reason": "None"}
+
 # --- DISCORD BOT ---
 class MagmaBot(discord.Client):
     def __init__(self):
@@ -85,6 +91,9 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("❌ Permissions required.", ephemeral=True)
     
+    if get_maintenance_status()['active']:
+        return await interaction.response.send_message("🛠️ System is currently under maintenance.", ephemeral=True)
+
     tier_upper = tier.upper().strip()
     if tier_upper not in TIER_ORDER:
         return await interaction.response.send_message("❌ Invalid tier format.", ephemeral=True)
@@ -108,13 +117,20 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         upsert=True
     )
 
-    # --- TEXT-ONLY NOTIFICATION (NO EMBED) ---
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
         msg_content = f"{discord_user.mention}\n**{player}** {action} to **{tier_upper}** in **{mode.value}**"
         await log_chan.send(content=msg_content)
 
     await interaction.response.send_message(f"✅ Successfully updated **{player}**.", ephemeral=True)
+
+@bot.tree.command(name="maintenance", description="Toggle maintenance mode")
+async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Routine Maintenance"):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+    db_manager.settings.update_one({"_id": "maintenance_mode"}, {"$set": {"active": active, "reason": reason}}, upsert=True)
+    status = "ENABLED" if active else "DISABLED"
+    await interaction.response.send_message(f"🛠️ Maintenance mode has been **{status}**. Reason: {reason}")
 
 # --- WEB UI ---
 app = Flask(__name__)
@@ -143,14 +159,27 @@ HTML_TEMPLATE = """
         .badge { background: rgba(255, 69, 0, 0.1); color: var(--accent); font-size: 0.7rem; font-weight: 800; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--accent); text-transform: uppercase; }
         .reg-na { color: #4ade80; } .reg-eu { color: #60a5fa; } .reg-asia { color: #f87171; }
         .reg-oc { color: #fbbf24; } .reg-af { color: #a78bfa; } .reg-sa { color: #2dd4bf; }
+        
+        /* Modal System */
         .modal-bg { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); display:flex; justify-content:center; align-items:center; z-index:2000; backdrop-filter: blur(8px); }
         .modal { background: #11141c; width: 420px; padding: 40px; border-radius: 24px; border: 1px solid var(--border); text-align: center; position: relative; }
         .close { position: absolute; top: 20px; right: 25px; font-size: 2rem; cursor: pointer; color: var(--dim); }
         .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 25px; max-height: 250px; overflow-y: auto; }
         .stat-box { background: #1a1d26; padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
+
+        /* Maintenance Splash */
+        .maint-container { height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+        .maint-icon { font-size: 4rem; margin-bottom: 20px; }
     </style>
 </head>
 <body>
+    {% if maintenance_active %}
+    <div class="maint-container">
+        <div class="maint-icon">🛠️</div>
+        <h1>Under Maintenance</h1>
+        <p style="color:var(--dim);">{{ maintenance_reason }}</p>
+    </div>
+    {% else %}
     <div class="header">
         <a href="/" class="logo">Magma<span>TIERS</span></a>
         <form><input type="text" name="search" placeholder="Search player..." style="background:var(--bg); border:1px solid var(--border); padding:8px 15px; border-radius:20px; color:white;" value="{{ search_q }}"></form>
@@ -209,6 +238,7 @@ HTML_TEMPLATE = """
         </a>
         {% endfor %}
     </div>
+    {% endif %}
 </body>
 </html>
 """
@@ -216,6 +246,8 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     if db_manager.db is None: return "Database Error.", 500
+    
+    m_stat = get_maintenance_status()
     mode_q = request.args.get('mode', '').strip().lower()
     search_q = request.args.get('search', '').strip().lower()
     
@@ -255,7 +287,15 @@ def index():
     processed = sorted(processed, key=lambda x: x['sort_val'], reverse=True)
     high_results = sorted(high_results, key=lambda x: x['total_score'], reverse=True)
 
-    return render_template_string(HTML_TEMPLATE, players=processed, high_results=high_results, spotlight=spotlight, all_modes=MODES, cur_mode=mode_q, search_q=search_q)
+    return render_template_string(HTML_TEMPLATE, 
+                                 players=processed, 
+                                 high_results=high_results, 
+                                 spotlight=spotlight, 
+                                 all_modes=MODES, 
+                                 cur_mode=mode_q, 
+                                 search_q=search_q,
+                                 maintenance_active=m_stat['active'],
+                                 maintenance_reason=m_stat['reason'])
 
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
