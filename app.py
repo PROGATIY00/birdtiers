@@ -1,6 +1,6 @@
 """
-MAGMATIERS INTEGRATED SYSTEM - VERSION 3.3
-Restored all features, fixed PyMongo NoneType errors, and added COLORED REGIONS.
+MAGMATIERS INTEGRATED SYSTEM - VERSION 3.4
+Restored classic tier notification with Discord mentions and colored regions.
 """
 
 import discord
@@ -87,7 +87,7 @@ bot = MagmaBot()
     mode=[app_commands.Choice(name=m, value=m) for m in MODES],
     region=[app_commands.Choice(name=r, value=r) for r in REGIONS]
 )
-async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str], reason: str = "Tested"):
+async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: app_commands.Choice[str], tier: str, region: app_commands.Choice[str], reason: str = "Standard Testing"):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("❌ Permissions required.", ephemeral=True)
     
@@ -98,6 +98,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     if tier_upper not in TIER_ORDER:
         return await interaction.response.send_message("❌ Invalid tier format.", ephemeral=True)
 
+    # Database Update
     db_manager.players.update_one(
         {"username": player, "gamemode": mode.value},
         {"$set": {
@@ -110,14 +111,28 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         upsert=True
     )
 
+    # --- OLD TIER MESSAGE STYLE ---
     log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
     if log_chan:
-        embed = discord.Embed(title="Tier Update", color=0xff4500, timestamp=datetime.datetime.utcnow())
-        embed.description = f"**{player}** set to **{tier_upper}** in **{mode.value}**\n**Reason:** {reason}\n**Region:** {region.value}"
+        embed = discord.Embed(
+            title="🏆 Tier Registry Update", 
+            color=0xff4500, 
+            timestamp=datetime.datetime.utcnow()
+        )
+        embed.description = (
+            f"**{player}** has been ranked as **{tier_upper}** in **{mode.value}**!\n\n"
+            f"👤 **User:** {discord_user.mention}\n"
+            f"🌍 **Region:** {region.value}\n"
+            f"📝 **Reason:** {reason}\n"
+            f"🛡️ **Tester:** {interaction.user.mention}"
+        )
         embed.set_thumbnail(url=f"https://minotar.net/helm/{player}/100.png")
-        await log_chan.send(embed=embed)
+        embed.set_footer(text="Official MagmaTIERS Registry")
+        
+        # Mentioning the user outside the embed or inside the content
+        await log_chan.send(content=f"Congratulations {discord_user.mention}!", embed=embed)
 
-    await interaction.response.send_message(f"✅ Updated **{player}** to {tier_upper}.", ephemeral=True)
+    await interaction.response.send_message(f"✅ Successfully updated **{player}**.", ephemeral=True)
 
 @bot.tree.command(name="maintenance")
 async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Updates"):
