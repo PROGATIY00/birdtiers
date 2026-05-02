@@ -196,6 +196,9 @@ STYLE = """
     .position-number { font-size: 1.4rem; font-weight: 800; color: #f5c06d; }
     .position-title { font-size: 0.95rem; color: #e5e9f2; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; }
     .position-points { font-size: 0.9rem; color: #9ba3af; text-align:right; }
+    .retired-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 14px 16px; margin-bottom: 10px; display:flex; justify-content:space-between; align-items:center; }
+    .retired-label { font-weight: 800; color: #ffffff; }
+    .retired-points { font-size: 0.9rem; color: #9ba3af; }
     .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 12px; }
     .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align:center; }
     .tier-icon-img { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display:block; object-fit: contain; }
@@ -262,6 +265,11 @@ def home():
                     "SA": "South America", "OC": "Oceania", "AF": "Africa"
                 }.get(p['reg'], p['reg'])
                 spotlight["placement_color"] = 'gold' if idx == 1 else 'silver' if idx == 2 else '#cd7f32' if idx == 3 else '#9ba3af'
+                spotlight["retired_kits"] = [
+                    {**k, "points": k.get("points")}
+                    for k in p.get("kits", []) if k.get("retired")
+                ]
+                spotlight["active_kits"] = [k for k in p.get("kits", []) if not k.get("retired")]
                 break
 
     template = """
@@ -302,10 +310,23 @@ def home():
                             <div class="position-points">({{ spot.score }} points)</div>
                         </div>
                     </div>
+                    {% if spot.retired_kits %}
+                    <div class="profile-section">
+                        <h3>RETIRED</h3>
+                        {% for k in spot.retired_kits %}
+                        <div class="retired-card">
+                            <div class="retired-label">Retired {{ k.tier }}</div>
+                            {% if k.points %}
+                            <div class="retired-points">({{ k.points }} points)</div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
                     <div class="profile-section">
                         <h3>TIERS</h3>
                         <div class="tier-grid">
-                            {% for k in spot.kits %}
+                            {% for k in spot.active_kits %}
                             <div class="tier-card">
                                 <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img" alt="{{ k.gamemode }} icon">
                                 <div class="tier-label">{{ k.tier }}</div>
