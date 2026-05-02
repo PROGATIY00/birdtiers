@@ -1,4 +1,4 @@
-
+\
 import discord
 from discord import app_commands
 from flask import Flask, render_template_string, request, redirect, url_for
@@ -352,7 +352,7 @@ def home():
                         kit["hover_text"] = "Retired"
                         kit["top_mode"] = False
                     else:
-                        kit["hover_text"] = f"Peak {kit['tier']}"
+                        kit["hover_text"] = "Peak"
                         kit["top_mode"] = (top_mode_tiers.get(kit["gamemode"], {}).get("tier_value") == kit["tier_value"])
                     augmented_kits.append(kit)
 
@@ -393,7 +393,7 @@ def home():
                         <h3>POSITION</h3>
                         <div class="position-box">
                             <div class="position-number" style="color: {{ spot.placement_color or 'gold' }};">#{{ spot.position }}</div>
-                            <div class="position-title">{{ spot.position_label }}</div>
+                            <div class="position-title">{{ spot.position_label }} · {{ spot.best }}</div>
                             <div class="position-points">({{ spot.score }} points)</div>
                         </div>
                     </div>
