@@ -165,10 +165,26 @@ STYLE = """
     input { background: var(--card); border: 1px solid var(--border); color: white; padding: 8px 15px; border-radius: 8px; outline: none; }
     
     .modal-bg { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); display:flex; justify-content:center; align-items:center; z-index:2000; backdrop-filter: blur(10px); }
-    .profile-card { background: #11141c; width: 420px; border-radius: 24px; border: 1px solid var(--border); overflow: hidden; }
-    .profile-header { background: linear-gradient(180deg, #1a1e29 0%, #11141c 100%); padding: 35px 20px; text-align: center; }
+    .profile-card { background: #11141c; width: 460px; border-radius: 24px; border: 1px solid var(--border); overflow: hidden; }
+    .profile-header { background: linear-gradient(180deg, #1a1e29 0%, #11141c 100%); padding: 35px 20px 25px; text-align: center; }
+    .profile-avatar-wrapper { width: 120px; height: 120px; border-radius: 50%; border: 4px solid #f5c06d; display: inline-flex; justify-content: center; align-items: center; margin: 0 auto 15px; background: radial-gradient(circle at top, rgba(255,255,255,0.12), transparent 55%); }
+    .profile-avatar { width: 104px; height: 104px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.12); object-fit: cover; }
+    .profile-name { margin: 0; font-size: 2rem; font-weight: 800; background: linear-gradient(90deg, #4da8ff, #c656ff); -webkit-background-clip: text; color: transparent; }
+    .profile-rank { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 16px; border-radius: 999px; background: rgba(255, 192, 100, 0.12); color: #f5c06d; border: 1px solid rgba(245,192,100,0.25); font-weight: 800; font-size: 0.9rem; }
+    .profile-region { color: #8f9bb3; margin-top: 8px; font-size: 0.95rem; }
+    .name-mc-button { display: inline-flex; align-items: center; gap: 8px; margin: 14px auto 0; padding: 10px 16px; border-radius: 999px; background: #0f1117; color: #d8dde7; text-decoration: none; border: 1px solid rgba(255,255,255,0.08); font-size: 0.9rem; }
+    .name-mc-button span { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:8px; background:#0b1320; font-size:0.9rem; }
     .profile-body { padding: 25px; background: #14171f; }
-    .kit-item { background: #1a1e29; padding: 10px; border-radius: 10px; display: flex; justify-content: space-between; margin-bottom: 6px; border: 1px solid var(--border); }
+    .profile-section { margin-bottom: 18px; }
+    .profile-section h3 { margin: 0 0 12px; font-size: 0.8rem; letter-spacing: 0.15em; color: #9ba3af; }
+    .position-box { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 18px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+    .position-number { font-size: 1.4rem; font-weight: 800; color: #f5c06d; }
+    .position-title { font-size: 0.95rem; color: #e5e9f2; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; }
+    .position-points { font-size: 0.9rem; color: #9ba3af; text-align:right; }
+    .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 12px; }
+    .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align:center; }
+    .tier-icon { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display:flex; justify-content:center; align-items:center; background: rgba(255,255,255,0.06); color: #fff; font-weight: 800; }
+    .tier-label { color: #d8dde7; font-size: 0.85rem; font-weight: 800; }
 </style>
 """
 
@@ -215,12 +231,22 @@ def home():
         # Filter logic
         if mode_q and data["mode_tier"] == "N/A": continue
         processed.append(data)
-        if search_q and u.lower() == search_q:
-            spotlight = dict(data)
-            spotlight["head_url"] = get_player_head_url(u, 80)
 
     players = sorted(processed, key=lambda x: x['score'], reverse=True)
     high_p = [p for p in players if p['rank'] in ["Grandmaster", "Legend", "Master"]]
+
+    if search_q:
+        for idx, p in enumerate(players, 1):
+            if p['u'].lower() == search_q:
+                spotlight = dict(p)
+                spotlight["head_url"] = get_player_head_url(p['u'], 80)
+                spotlight["position"] = idx
+                spotlight["position_label"] = mode_q.upper() if mode_q else "OVERALL"
+                spotlight["region_name"] = {
+                    "NA": "North America", "EU": "Europe", "AS": "Asia",
+                    "SA": "South America", "OC": "Oceania", "AF": "Africa"
+                }.get(p['reg'], p['reg'])
+                break
 
     template = """
     <html><head><meta http-equiv="refresh" content="15"><title>MagmaTIERS</title>{{ s|safe }}</head>
@@ -241,21 +267,36 @@ def home():
         <div class="modal-bg" onclick="window.location.href='/?mode={{m}}'">
             <div class="profile-card" onclick="event.stopPropagation()">
                 <div class="profile-header">
-                    <img src="{{ spot.head_url }}" style="border-radius:15px; border:3px solid var(--accent); margin-bottom:15px;">
-                    <h2 style="margin:0;">{{ spot.u }}</h2>
-                    <span class="badge" style="color:{{ spot.rank_c }}; border-color:{{ spot.rank_c }}; margin-top:10px; display:inline-block;">{{ spot.rank }}</span>
+                    <div class="profile-avatar-wrapper">
+                        <img src="{{ spot.head_url }}" class="profile-avatar">
+                    </div>
+                    <h2 class="profile-name">{{ spot.u }}</h2>
+                    <div class="profile-rank">🏆 {{ spot.rank }}</div>
+                    <div class="profile-region">{{ spot.region_name }}</div>
+                    <a class="name-mc-button" href="https://namemc.com/profile/{{ spot.u }}" target="_blank">
+                        <span>N</span> NameMC
+                    </a>
                 </div>
                 <div class="profile-body">
-                    <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
-                        <span style="color:{{ spot.reg_c }}; font-weight:800;">{{ spot.reg }} Region</span>
-                        <span style="color:var(--accent); font-weight:800;">{{ spot.score }} Pts</span>
+                    <div class="profile-section">
+                        <h3>POSITION</h3>
+                        <div class="position-box">
+                            <div class="position-number">#{{ spot.position }}</div>
+                            <div class="position-title">{{ spot.position_label }}</div>
+                            <div class="position-points">({{ spot.score }} points)</div>
+                        </div>
                     </div>
-                    {% for k in spot.kits %}
-                    <div class="kit-item">
-                        <span style="color:#9ba3af;">{{ k.gamemode }}</span>
-                        <b style="color:var(--accent)">{{ k.tier }}</b>
+                    <div class="profile-section">
+                        <h3>TIERS</h3>
+                        <div class="tier-grid">
+                            {% for k in spot.kits %}
+                            <div class="tier-card">
+                                <div class="tier-icon">{{ k.gamemode[:2].upper() }}</div>
+                                <div class="tier-label">{{ k.tier }}</div>
+                            </div>
+                            {% endfor %}
+                        </div>
                     </div>
-                    {% endfor %}
                 </div>
             </div>
         </div>
