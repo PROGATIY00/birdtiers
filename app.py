@@ -277,6 +277,12 @@ def home():
             </div>
             {% endif %}
 
+            {% if m and not players %}
+            <div style="text-align:center; padding:50px; color:#9ba3af; font-size:1.2rem;">
+                <div style="font-size:2rem; margin-bottom:10px;">🥱</div>
+                Oh oh. Looks like it's empty
+            </div>
+            {% else %}
             {% for p in players %}
             {% set placement_color = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
             <a href="/?search={{ p.u }}&mode={{m}}" class="player-row">
@@ -287,6 +293,7 @@ def home():
                 <div style="text-align:right; color:var(--accent); font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
             </a>
             {% endfor %}
+            {% endif %}
         </div>
     </body></html>
     """
