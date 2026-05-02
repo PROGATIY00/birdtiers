@@ -1,21 +1,16 @@
-"""
-MAGMATIERS INTEGRATED SYSTEM - VERSION 4.8.5
---------------------------------------------
-- RESTORED: Gamemode Filter (Crystal, UHC, etc.).
-- RESTORED: High Results Dashboard & Report System.
-- RESTORED: Colored Regions & Colored Ranks.
-- MAINTENANCE: Full toggle logic preserved.
-- PROFILE: High-fidelity "Player Card" stats.
-"""
 
 import discord
 from discord import app_commands
 from flask import Flask, render_template_string, request, redirect, url_for
 from pymongo import MongoClient
 from bson.objectid import ObjectId
+import json
 import os
 import threading
 import datetime
+import urllib.parse
+import urllib.request
+import urllib.error
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TOKEN")
@@ -37,13 +32,22 @@ RANK_COLORS = {
 }
 
 # --- DATABASE ---
+class DummyCollection:
+    def find(self, *args, **kwargs):
+        return []
+    def find_one(self, *args, **kwargs):
+        return None
+    def update_one(self, *args, **kwargs):
+        return None
+
 class DatabaseManager:
     def __init__(self, uri):
         self.client = MongoClient(uri) if uri else None
         self.db = self.client['magmatiers_db'] if self.client is not None else None
-        self.players = self.db['players'] if self.db is not None else None
-        self.settings = self.db['settings'] if self.db is not None else None
-        self.reports = self.db['reports'] if self.db is not None else None
+        collection = self.db is not None
+        self.players = self.db['players'] if collection else DummyCollection()
+        self.settings = self.db['settings'] if collection else DummyCollection()
+        self.reports = self.db['reports'] if collection else DummyCollection()
 
 db_mgr = DatabaseManager(MONGO_URI)
 
@@ -67,6 +71,87 @@ def is_maintenance_active():
     if db_mgr.settings is None: return {"active": False}
     status = db_mgr.settings.find_one({"_id": "maintenance_mode"})
     return status if status is not None else {"active": False}
+
+# --- SKIN HELPERS ---
+TLAUNCHER_HEAD_ENDPOINTS = [
+    "https://api.tlauncher.org/skin/{username}?size={size}",
+    "https://auth.tlauncher.org/skin/{username}?size={size}",
+    "https://tlauncher.org/skin/{username}?size={size}",
+    "https://auth.tlauncher.org/launcher/api/v2/skin/{username}?size={size}",
+    "https://api.tlauncher.org/launcher/api/v2/skin/{username}?size={size}",
+]
+MOJANG_PROFILE_URL = "https://api.mojang.com/users/profiles/minecraft/{}"
+CRAFTATAR_HEAD_URL = "https://crafatar.com/avatars/{}?size={}&overlay"
+DEFAULT_HEAD_URL = "https://minotar.net/helm/{}/{}"
+UUID_CACHE = {}
+SKIN_CACHE = {}
+
+
+def fetch_image_url(url, timeout=5):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            return resp.status == 200 and content_type.startswith("image")
+    except Exception:
+        return False
+
+
+def get_mojang_uuid(username):
+    username = username.strip()
+    if not username:
+        return None
+    if username in UUID_CACHE:
+        return UUID_CACHE[username]
+    try:
+        url = MOJANG_PROFILE_URL.format(urllib.parse.quote(username))
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status != 200:
+                UUID_CACHE[username] = None
+                return None
+            data = json.loads(resp.read().decode("utf-8"))
+            uuid = data.get("id")
+            UUID_CACHE[username] = uuid
+            return uuid
+    except Exception:
+        UUID_CACHE[username] = None
+        return None
+
+
+def is_premium_player(username):
+    return get_mojang_uuid(username) is not None
+
+
+def get_premium_head_url(username, size=32):
+    uuid = get_mojang_uuid(username)
+    if not uuid:
+        return DEFAULT_HEAD_URL.format(urllib.parse.quote(username), size)
+    return CRAFTATAR_HEAD_URL.format(uuid, size)
+
+
+def get_tlauncher_head_url(username, size=32):
+    username = username.strip()
+    if not username:
+        return DEFAULT_HEAD_URL.format("Steve", size)
+    cache_key = f"{username}:{size}"
+    if cache_key in SKIN_CACHE:
+        return SKIN_CACHE[cache_key]
+    escaped = urllib.parse.quote(username)
+    for endpoint in TLAUNCHER_HEAD_ENDPOINTS:
+        url = endpoint.format(username=escaped, size=size)
+        if fetch_image_url(url, timeout=5):
+            SKIN_CACHE[cache_key] = url
+            return url
+    fallback = DEFAULT_HEAD_URL.format(escaped, size)
+    SKIN_CACHE[cache_key] = fallback
+    return fallback
+
+
+def get_player_head_url(username, size=32):
+    if is_premium_player(username):
+        return get_premium_head_url(username, size)
+    return get_tlauncher_head_url(username, size)
 
 # --- DISCORD BOT ---
 class MagmaBot(discord.Client):
@@ -136,7 +221,15 @@ def home():
         u = r['username']
         if u not in users:
             reg = r.get('region', 'NA').upper()
-            users[u] = {"u": u, "tiers": [], "kits": [], "reg": reg, "reg_c": REGION_COLORS.get(reg, "#fff"), "mode_tier": "N/A"}
+            users[u] = {
+                "u": u,
+                "tiers": [],
+                "kits": [],
+                "reg": reg,
+                "reg_c": REGION_COLORS.get(reg, "#fff"),
+                "mode_tier": "N/A",
+                "head_url": get_player_head_url(u, 32)
+            }
         
         users[u]["kits"].append(r)
         if r['gamemode'].capitalize() == mode_q:
@@ -155,7 +248,9 @@ def home():
         # Filter logic
         if mode_q and data["mode_tier"] == "N/A": continue
         processed.append(data)
-        if search_q and u.lower() == search_q: spotlight = data
+        if search_q and u.lower() == search_q:
+            spotlight = dict(data)
+            spotlight["head_url"] = get_player_head_url(u, 80)
 
     players = sorted(processed, key=lambda x: x['score'], reverse=True)
     high_p = [p for p in players if p['rank'] in ["Grandmaster", "Legend", "Master"]]
@@ -179,7 +274,7 @@ def home():
         <div class="modal-bg" onclick="window.location.href='/?mode={{m}}'">
             <div class="profile-card" onclick="event.stopPropagation()">
                 <div class="profile-header">
-                    <img src="https://minotar.net/helm/{{ spot.u }}/80.png" style="border-radius:15px; border:3px solid var(--accent); margin-bottom:15px;">
+                    <img src="{{ spot.head_url }}" style="border-radius:15px; border:3px solid var(--accent); margin-bottom:15px;">
                     <h2 style="margin:0;">{{ spot.u }}</h2>
                     <span class="badge" style="color:{{ spot.rank_c }}; border-color:{{ spot.rank_c }}; margin-top:10px; display:inline-block;">{{ spot.rank }}</span>
                 </div>
@@ -206,7 +301,7 @@ def home():
                 {% for h in high_p[:3] %}
                 <a href="/?search={{h.u}}" class="player-row" style="border-color: gold;">
                     <div style="color:gold; font-weight:800;">TOP</div>
-                    <img src="https://minotar.net/helm/{{h.u}}/32.png">
+                    <img src="{{ h.head_url }}">
                     <div>{{h.u}} <span class="badge" style="color:{{ h.rank_c }}">{{ h.rank }}</span></div>
                     <div style="color:{{h.reg_c}}">{{h.reg}}</div>
                     <div style="text-align:right; color:var(--accent); font-weight:800;">{{h.best}}</div>
@@ -216,9 +311,10 @@ def home():
             {% endif %}
 
             {% for p in players %}
+            {% set placement_color = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
             <a href="/?search={{ p.u }}&mode={{m}}" class="player-row">
-                <div style="opacity:0.3; font-weight:800;">#{{ loop.index }}</div>
-                <img src="https://minotar.net/helm/{{ p.u }}/32.png">
+                <div style="font-weight:800; color:{{ placement_color }};">#{{ loop.index }}</div>
+                <img src="{{ p.head_url }}">
                 <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }}; margin-left:10px;">{{ p.rank }}</span></div>
                 <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
                 <div style="text-align:right; color:var(--accent); font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
