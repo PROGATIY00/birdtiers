@@ -100,6 +100,50 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         if c: await c.send(f"**{player}** updated to **{t_up}** ({mode})")
     await interaction.response.send_message(f"Updated {player}", ephemeral=True)
 
+@bot.tree.command(name="maintenance")
+async def maintenance(interaction: discord.Interaction, action: str, reason: str = None):
+    if not interaction.user.guild_permissions.manage_roles: return
+    if action.lower() == "on":
+        db_mgr.settings.update_one(
+            {"_id": "maintenance_mode"},
+            {"$set": {"active": True, "reason": reason or "Maintenance in progress"}},
+            upsert=True
+        )
+        await interaction.response.send_message("Maintenance mode enabled", ephemeral=True)
+    elif action.lower() == "off":
+        db_mgr.settings.update_one(
+            {"_id": "maintenance_mode"},
+            {"$set": {"active": False}},
+            upsert=True
+        )
+        await interaction.response.send_message("Maintenance mode disabled", ephemeral=True)
+    else:
+        await interaction.response.send_message("Use 'on' or 'off' for action", ephemeral=True)
+
+@bot.tree.command(name="retire")
+async def retire(interaction: discord.Interaction, player: str):
+    if not interaction.user.guild_permissions.manage_roles: return
+    result = db_mgr.players.update_many(
+        {"username": player},
+        {"$set": {"retired": True, "ts": datetime.datetime.utcnow()}}
+    )
+    if result.modified_count > 0:
+        await interaction.response.send_message(f"Retired {player}", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"Player {player} not found", ephemeral=True)
+
+@bot.tree.command(name="ban")
+async def ban(interaction: discord.Interaction, player: str):
+    if not interaction.user.guild_permissions.manage_roles: return
+    result = db_mgr.players.update_many(
+        {"username": player},
+        {"$set": {"banned": True, "ts": datetime.datetime.utcnow()}}
+    )
+    if result.modified_count > 0:
+        await interaction.response.send_message(f"Banned {player}", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"Player {player} not found", ephemeral=True)
+
 # --- WEB UI ---
 app = Flask(__name__)
 
