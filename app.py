@@ -74,7 +74,7 @@ DEFAULT_HEAD_URL = "https://minotar.net/helm/{}/{}"
 
 def get_player_head_url(username, size=32):
     username = (username or "").strip()
-    return DEFAULT_HEAD_URL.format(urllib.parse.quote(username or "Steve"), size)
+    return DEFAULT_HEAD_URL.format(username or "Steve", size)
 
 # --- DISCORD BOT ---
 class MagmaBot(discord.Client):
