@@ -104,15 +104,27 @@ bot = MagmaBot()
 async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: str, tier: str, region: str):
     if not interaction.user.guild_permissions.manage_roles: return
     t_up = tier.upper().strip()
+    existing = db_mgr.players.find_one({"username": player, "gamemode": mode})
+    old_tier = existing.get("tier") if existing else None
+    old_value = get_tier_value(old_tier) if old_tier else 0
+    new_value = get_tier_value(t_up)
+    if new_value > old_value:
+        status = "promoted"
+    elif new_value < old_value:
+        status = "demoted"
+    else:
+        status = "updated"
+
     db_mgr.players.update_one(
         {"username": player, "gamemode": mode},
         {"$set": {"tier": t_up, "region": region.upper(), "discord_id": discord_user.id, "retired": False, "banned": False, "ts": datetime.datetime.utcnow()}},
         upsert=True
     )
-    chan = HIGH_RESULTS_ID if get_tier_value(t_up) >= 5 else LOG_CHANNEL_ID
+    chan = HIGH_RESULTS_ID if new_value >= 5 else LOG_CHANNEL_ID
     if chan:
         c = bot.get_channel(int(chan))
         if c: await c.send(f"**{player}** updated to **{t_up}** ({mode})")
+        if c: await c.send(f"{discord_user.mention}\n{player} {status} to {t_up} in {mode}")
     await interaction.response.send_message(f"Updated {player}", ephemeral=True)
 
 @bot.tree.command(name="maintenance")
@@ -225,7 +237,7 @@ def home():
     for r in raw:
         u = r['username']
         if u not in users:
-            reg = r.get('region', 'NA').upper()
+            reg = r.get('region', 'NA').strip().upper()
             users[u] = {
                 "u": u,
                 "tiers": [],
