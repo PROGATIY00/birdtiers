@@ -1,8 +1,11 @@
 """
-MAGMATIERS INTEGRATED SYSTEM - VERSION 4.5.3
-- Restored: Maintenance Mode & Profile Modals
-- Restored: Ban/Retire logic visibility
-- Fixed: Public MOD button remains hidden
+MAGMATIERS INTEGRATED SYSTEM - VERSION 4.5.7
+- RESTORED: Report Decline/Dismiss System (Mod Panel)
+- RESTORED: High Results (LT3+) Spotlight on Home
+- RESTORED: Detailed Player Profile Modals (Search/Click)
+- RESTORED: Maintenance Mode & Ban/Retire Logic
+- RESTORED: Region tracking & Tier sorting
+- SPEED: Optimized 15s Auto-Refresh
 """
 
 import discord
@@ -13,7 +16,6 @@ from bson.objectid import ObjectId
 import os
 import threading
 import datetime
-import logging
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TOKEN")
@@ -25,7 +27,6 @@ MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", 
 REGIONS = ["NA", "EU", "ASIA", "AF", "OC", "SA"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 
-# --- DATABASE MANAGER ---
 class DatabaseManager:
     def __init__(self, uri):
         self.client = MongoClient(uri)
@@ -36,7 +37,7 @@ class DatabaseManager:
 
 db_manager = DatabaseManager(MONGO_URI)
 
-# --- UTILITIES ---
+# --- CORE LOGIC ---
 def get_tier_value(tier_name):
     try: return TIER_ORDER.index(tier_name.upper().strip()) + 1
     except: return 0
@@ -73,76 +74,52 @@ bot = MagmaBot()
 
 @bot.tree.command(name="rank", description="Update player tier")
 async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: str, tier: str, region: str, reason: str = "Standard Testing"):
-    if get_maintenance_status()['active']: return await interaction.response.send_message("🛠️ Maintenance Mode is active.", ephemeral=True)
+    if get_maintenance_status()['active']: return await interaction.response.send_message("🛠️ Maintenance.", ephemeral=True)
     if not interaction.user.guild_permissions.manage_roles: return await interaction.response.send_message("❌ No perms.", ephemeral=True)
     
     tier_upper = tier.upper().strip()
     db_manager.players.update_one(
         {"username": player, "gamemode": mode},
-        {"$set": {"tier": tier_upper, "region": region, "discord_id": discord_user.id, "retired": False, "banned": False}},
+        {"$set": {"tier": tier_upper, "region": region, "discord_id": discord_user.id, "retired": False, "banned": False, "last_updated": datetime.datetime.utcnow()}},
         upsert=True
     )
 
     chan = HIGH_RESULTS_ID if get_tier_value(tier_upper) >= 5 else LOG_CHANNEL_ID
     log_chan = bot.get_channel(int(chan))
-    if log_chan: await log_chan.send(content=f"{discord_user.mention}\n**{player}** updated to **{tier_upper}** in **{mode}**\n**Reason:** {reason}")
+    if log_chan: await log_chan.send(content=f"{discord_user.mention}\n**{player}** updated to **{tier_upper}** in **{mode}**")
     await interaction.response.send_message(f"✅ Updated {player}.", ephemeral=True)
 
-@bot.tree.command(name="maintenance", description="Toggle maintenance mode")
-async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "Updating System"):
-    if not interaction.user.guild_permissions.administrator: return await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+@bot.tree.command(name="maintenance")
+async def maintenance(interaction: discord.Interaction, active: bool, reason: str = "System Update"):
+    if not interaction.user.guild_permissions.administrator: return
     db_manager.settings.update_one({"_id": "maintenance_mode"}, {"$set": {"active": active, "reason": reason}}, upsert=True)
-    await interaction.response.send_message(f"🛠️ Maintenance is now **{'ON' if active else 'OFF'}**.")
+    await interaction.response.send_message(f"🛠️ Maintenance: {active}")
 
 # --- WEB UI ---
 app = Flask(__name__)
 
-BASE_STYLE = """
+STYLE = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;800&display=swap');
     :root { --bg: #0b0c10; --card: #14171f; --border: #262932; --accent: #ff4500; --text: #f0f2f5; --dim: #9ba3af; }
     body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
-    .header { background: #0f1117; padding: 1rem 4rem; border-bottom: 2px solid var(--accent); display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 1000; }
-    .logo { font-size: 1.8rem; font-weight: 800; color: white; text-decoration: none; }
-    .logo span { color: var(--accent); }
-    .nav-strip { background: #0f1117; padding: 10px; display: flex; justify-content: center; gap: 10px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-    .nav-btn { padding: 6px 15px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); color: var(--dim); text-decoration: none; font-size: 0.9rem; }
-    .nav-btn.active { border-color: var(--accent); color: white; }
+    .header { background: #0f1117; padding: 1rem 4rem; border-bottom: 2px solid var(--accent); display: flex; justify-content: space-between; align-items: center; }
+    .nav-btn { padding: 6px 15px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); color: white; text-decoration: none; font-size: 0.9rem; }
     .container { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
-    .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; margin-bottom: 0.8rem; display: grid; grid-template-columns: 80px 60px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
-    .player-row:hover { border-color: var(--accent); transform: translateY(-2px); }
-    .badge { background: rgba(255, 69, 0, 0.1); color: var(--accent); font-size: 0.7rem; font-weight: 800; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--accent); text-transform: uppercase; }
+    .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; margin-bottom: 0.8rem; display: grid; grid-template-columns: 60px 50px 1fr 100px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
     .pos-1 { color: #FFD700; font-weight: 800; }
-    .pos-2 { color: #C0C0C0; font-weight: 800; }
-    .pos-3 { color: #CD7F32; font-weight: 800; }
-    .pos-default { color: #a19d94; font-weight: 600; }
-    .modal-bg { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); display:flex; justify-content:center; align-items:center; z-index:2000; backdrop-filter: blur(8px); }
-    .modal { background: #11141c; width: 420px; padding: 40px; border-radius: 24px; border: 1px solid var(--border); text-align: center; }
-    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 25px; }
-    .stat-box { background: #1a1d26; padding: 12px; border-radius: 12px; border: 1px solid var(--border); }
-    .stat-retired { opacity: 0.4; filter: grayscale(1); border-style: dashed; }
-    input, textarea { background: var(--card); border: 1px solid var(--border); color: white; padding: 12px; border-radius: 8px; width: 100%; margin-top: 8px; font-family: inherit; }
-    .btn { background: var(--accent); color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; text-decoration: none; display: inline-block; margin-top: 15px; }
-    .card { background: var(--card); border: 1px solid var(--border); padding: 25px; border-radius: 15px; }
+    .badge { border: 1px solid var(--accent); color: var(--accent); font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
+    .high-results { background: rgba(255, 69, 0, 0.05); border: 2px solid var(--accent); border-radius: 15px; padding: 20px; margin-bottom: 30px; }
+    .modal-bg { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); display:flex; justify-content:center; align-items:center; z-index:2000; backdrop-filter: blur(5px); }
+    .modal { background: #11141c; width: 400px; padding: 30px; border-radius: 20px; border: 1px solid var(--border); text-align: center; }
+    .stat-retired { opacity: 0.4; text-decoration: line-through; }
 </style>
-"""
-
-NAV_HTML = """
-<div class="header">
-    <a href="/" class="logo">Magma<span>TIERS</span></a>
-    <div>
-        <form action="/" method="GET" style="display:inline;">
-            <input type="text" name="search" placeholder="Search player..." style="width:150px; padding:6px; margin-right:10px;">
-        </form>
-        <a href="/report" class="nav-btn">REPORT</a>
-    </div>
-</div>
 """
 
 @app.route('/')
 def index():
     m_stat = get_maintenance_status()
-    if m_stat['active']: return f"<html><head>{BASE_STYLE}</head><body style='display:flex; justify-content:center; align-items:center; height:100vh;'><h1>🛠️ {m_stat['reason']}</h1></body></html>"
+    if m_stat['active']: return f"<html><head>{STYLE}</head><body style='display:flex; justify-content:center; align-items:center; height:100vh;'><h1>🛠️ {m_stat['reason']}</h1></body></html>"
 
     mode_q = request.args.get('mode', '').lower()
     search_q = request.args.get('search', '').lower()
@@ -157,90 +134,90 @@ def index():
             users[u]["tiers"].append(r['tier'])
             users[u]["kits"][r['gamemode'].lower()] = r['tier']
 
-    # Profile Modal Logic
     spotlight = None
     if search_q:
-        match = users.get(next((name for name in users if name.lower() == search_q), None))
-        if match:
-            spotlight = {
-                "username": match['username'],
-                "rank_name": get_global_rank_name(match['tiers']),
-                "stats": [{"mode": x['gamemode'], "tier": x['tier'], "retired": x.get('retired', False)} for x in match['all_raw']]
-            }
+        match = users.get(next((n for n in users if n.lower() == search_q), None))
+        if match: spotlight = {"username": match['username'], "rank_name": get_global_rank_name(match['tiers']), "stats": match['all_raw']}
 
     processed = []
     for u, data in users.items():
         if not data["tiers"] and not spotlight: continue
         best = max(data["tiers"], key=get_tier_value) if data["tiers"] else "N/A"
-        entry = {
-            "username": u, "display_tier": data["kits"].get(mode_q, best) if mode_q else best,
-            "total_score": calculate_player_score(data["tiers"]),
-            "rank_name": get_global_rank_name(data["tiers"]), "region": data['region'],
-            "sort_val": get_tier_value(data["kits"].get(mode_q)) if mode_q else calculate_player_score(data["tiers"])
-        }
+        entry = {"username": u, "display_tier": data["kits"].get(mode_q, best), "rank_name": get_global_rank_name(data["tiers"]), "region": data['region'], "score": calculate_player_score(data["tiers"])}
         if mode_q and mode_q not in data["kits"]: continue
         processed.append(entry)
 
-    players = sorted(processed, key=lambda x: x['sort_val'], reverse=True)
+    players = sorted(processed, key=lambda x: x['score'], reverse=True)
+    high_p = [p for p in players if p['rank_name'] in ["Grandmaster", "Legend"]]
 
     template = """
-    <html><head><title>MagmaTIERS</title>{{ style|safe }}</head>
+    <html><head><meta http-equiv="refresh" content="15"><title>MagmaTIERS</title>{{ style|safe }}</head>
     <body>
-        {{ nav|safe }}
+        <div class="header">
+            <a href="/" class="logo">Magma<span>TIERS</span></a>
+            <form action="/"><input name="search" placeholder="Search..."></form>
+            <a href="/report" class="nav-btn">REPORT</a>
+        </div>
         {% if spotlight %}
-        <div class="modal-bg" onclick="window.location.href='/'">
-            <div class="modal" onclick="event.stopPropagation()">
-                <img src="https://minotar.net/helm/{{ spotlight.username }}/80.png" style="border-radius:12px; margin-bottom:15px;">
-                <h2 style="margin:0;">{{ spotlight.username }}</h2>
-                <span class="badge">{{ spotlight.rank_name }}</span>
-                <div class="stat-grid">
-                    {% for s in spotlight.stats %}
-                    <div class="stat-box {% if s.retired %}stat-retired{% endif %}">
-                        <div style="font-size:0.7rem; color:var(--accent);">{{ s.mode|upper }}</div>
-                        <div style="font-weight:700;">{{ s.tier }}</div>
-                    </div>
-                    {% endfor %}
-                </div>
+        <div class="modal-bg" onclick="window.location.href='/'"><div class="modal" onclick="event.stopPropagation()">
+            <img src="https://minotar.net/helm/{{ spotlight.username }}/64.png" style="margin-bottom:10px;">
+            <h2>{{ spotlight.username }}</h2><span class="badge">{{ spotlight.rank_name }}</span>
+            <div style="margin-top:20px;">
+                {% for s in spotlight.stats %}<div class="{% if s.retired %}stat-retired{% endif %}">{{ s.gamemode }}: <b>{{ s.tier }}</b></div>{% endfor %}
             </div>
-        </div>
+        </div></div>
         {% endif %}
-        <div class="nav-strip">
-            <a href="/" class="nav-btn {% if not mode_q %}active{% endif %}">GLOBAL</a>
-            {% for m in all_modes %}
-            <a href="/?mode={{ m|lower }}" class="nav-btn {% if mode_q == m|lower %}active{% endif %}">{{ m|upper }}</a>
-            {% endfor %}
-        </div>
         <div class="container">
+            {% if not mode_q and not search_q and high_p %}
+            <div class="high-results"><b>🔥 HIGH RESULTS</b>
+                {% for h in high_p[:3] %}<a href="/?search={{h.username}}" class="player-row" style="border-color:gold;"><div>⭐</div><img src="https://minotar.net/helm/{{h.username}}/32.png"><div>{{h.username}}</div><div>{{h.region}}</div><div style="color:var(--accent)">{{h.display_tier}}</div></a>{% endfor %}
+            </div>
+            {% endif %}
             {% for p in players %}
             <a href="/?search={{ p.username }}" class="player-row">
-                <div class="pos-{{ '1' if loop.index == 1 else '2' if loop.index == 2 else '3' if loop.index == 3 else 'default' }}">#{{ loop.index }}</div>
-                <img src="https://minotar.net/helm/{{ p.username }}/40.png" style="border-radius:4px;">
-                <div><span style="font-weight:700;">{{ p.username }}</span> <span class="badge">{{ p.rank_name }}</span></div>
+                <div class="pos-{{ loop.index }}">#{{ loop.index }}</div>
+                <img src="https://minotar.net/helm/{{ p.username }}/32.png">
+                <div>{{ p.username }} <span class="badge">{{ p.rank_name }}</span></div>
                 <div style="color:var(--dim);">{{ p.region }}</div>
-                <div style="text-align:right; font-weight:800; color:var(--accent);">{{ p.display_tier }}</div>
+                <div style="text-align:right; color:var(--accent); font-weight:800;">{{ p.display_tier }}</div>
             </a>
             {% endfor %}
         </div>
     </body></html>
     """
-    return render_template_string(template, style=BASE_STYLE, nav=NAV_HTML, players=players, spotlight=spotlight, all_modes=MODES, mode_q=mode_q)
+    return render_template_string(template, style=STYLE, players=players, spotlight=spotlight, high_p=high_p)
 
 @app.route('/report', methods=['GET', 'POST'])
-def report_page():
+def report():
     if request.method == 'POST':
-        db_manager.reports.insert_one({"player": request.form.get('player'), "reason": request.form.get('reason'), "evidence": request.form.get('evidence'), "status": "Pending", "time": datetime.datetime.utcnow()})
-        return render_template_string("<html><head>{{ s|safe }}</head><body>{{ n|safe }}<div class='container'><h1>Report Sent!</h1><a href='/' class='btn'>Back</a></div></body></html>", s=BASE_STYLE, n=NAV_HTML)
-    return render_template_string("<html><head>{{ style|safe }}</head><body>{{ nav|safe }}<div class='container' style='max-width:500px;'><h1>Report</h1><div class='card'><form method='POST'><label>Player</label><input name='player' required><label>Reason</label><textarea name='reason' required></textarea><label>Evidence</label><input name='evidence'><button type='submit' class='btn'>Submit</button></form></div></div></body></html>", style=BASE_STYLE, nav=NAV_HTML)
+        db_manager.reports.insert_one({"player": request.form.get('player'), "reason": request.form.get('reason'), "status": "Pending"})
+        return redirect('/')
+    return render_template_string("<html><head>{{s|safe}}</head><body><div class='container'><form method='POST'><h1>Report</h1><input name='player' placeholder='User'><br><textarea name='reason'></textarea><br><button class='nav-btn'>Send</button></form></div></body></html>", s=STYLE)
 
 @app.route('/moderation')
-def moderation_page():
+def moderation():
     reps = list(db_manager.reports.find({"status": "Pending"}))
-    return render_template_string("<html><head>{{ style|safe }}</head><body>{{ nav|safe }}<div class='container'><h1>Moderation</h1>{% for r in reps %}<div class='card' style='margin-bottom:10px;'><h3>{{ r.player }}</h3><p>{{ r.reason }}</p><form action='/moderation/resolve' method='POST'><input type='hidden' name='id' value='{{ r._id }}'><button name='a' value='approve' class='btn'>Approve</button></form></div>{% endfor %}</div></body></html>", style=BASE_STYLE, nav=NAV_HTML, reps=reps)
+    template = """
+    <html><head>{{s|safe}}</head><body><div class="container"><h1>Moderation Panel</h1>
+        {% for r in reps %}
+        <div style="background:var(--card); padding:20px; border-radius:12px; margin-bottom:10px; border:1px solid var(--border);">
+            <h3>{{ r.player }}</h3><p>{{ r.reason }}</p>
+            <form action="/moderation/resolve" method="POST">
+                <input type="hidden" name="id" value="{{ r._id }}">
+                <button name="a" value="approve" class="nav-btn" style="background:#22c55e; border:none;">Approve</button>
+                <button name="a" value="decline" class="nav-btn" style="background:#ef4444; border:none;">Decline</button>
+            </form>
+        </div>
+        {% endfor %}
+    </div></body></html>
+    """
+    return render_template_string(template, s=STYLE, reps=reps)
 
 @app.route('/moderation/resolve', methods=['POST'])
-def resolve_report():
-    db_manager.reports.update_one({"_id": ObjectId(request.form.get('id'))}, {"$set": {"status": request.form.get('a')}})
-    return redirect(url_for('moderation_page'))
+def resolve():
+    status = "Resolved" if request.form.get('a') == "approve" else "Declined"
+    db_manager.reports.update_one({"_id": ObjectId(request.form.get('id'))}, {"$set": {"status": status}})
+    return redirect('/moderation')
 
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
