@@ -224,6 +224,7 @@ STYLE = """
     .tier-card.top-mode .tier-label { color: #ffd700; }
     .tier-icon-img { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display:block; object-fit: contain; }
     .tier-label { color: #d8dde7; font-size: 0.85rem; font-weight: 800; }
+    .tier-subtext { color: #9ba3af; font-size: 0.75rem; margin-top: 6px; line-height: 1.25; }
 </style>
 """
 
@@ -380,6 +381,7 @@ def home():
                             <div class="tier-card{% if k.retired %} retired{% endif %}{% if k.top_mode %} top-mode{% endif %}" title="{{ k.hover_text }}">
                                 <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img" alt="{{ k.gamemode }} icon">
                                 <div class="tier-label">{{ k.gamemode }} · {{ k.tier }}</div>
+                                <div class="tier-subtext">{{ k.hover_text }}</div>
                             </div>
                             {% endfor %}
                         </div>
