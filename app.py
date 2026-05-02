@@ -28,7 +28,7 @@ RANK_COLORS = {
 }
 
 GAMEMODE_ICON_URLS = {
-    "Crystal": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207086343028856/638965736295609752.png?ex=69f79839&is=69f646b9&hm=0c350e70e11723eadd3af6cfb3e66ff3384106d5856b8c325b1657a8befc9723&,
+    "Crystal": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207086343028856/638965736295609752.png?ex=69f79839&is=69f646b9&hm=0c350e70e11723eadd3af6cfb3e66ff3384106d5856b8c325b1657a8befc9723&",
     "UHC": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207572454740038/uhc-removebg-preview.png?ex=69f798ad&is=69f6472d&hm=3710a0412244706eeb5bdd513e3f8f1ffceaaa24677e7f8500bc09f27a131b85&",
     "Pot": "https://cdn.discordapp.com/attachments/1499096668635926681/1500208443074674728/pot.png?ex=69f7997d&is=69f647fd&hm=3f370624f948b5ab005273c3662473b4f2259bbbee120a1296793ca597febb33&",
     "SMP": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207572110676049/smp-removebg-preview.png?ex=69f798ad&is=69f6472d&hm=766dc148e3eecdfa38f87f7301f0b656c3d951595570c92a129d1e9e0827c7e6&",
