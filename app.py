@@ -171,7 +171,7 @@ def home():
             </div>
             <div style="display:flex; gap:10px; align-items:center;">
                 <form action="/" style="margin:0;"><input name="search" placeholder="Search..."></form>
-                
+            
             </div>
         </div>
 
