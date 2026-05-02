@@ -265,11 +265,29 @@ def home():
                     "SA": "South America", "OC": "Oceania", "AF": "Africa"
                 }.get(p['reg'], p['reg'])
                 spotlight["placement_color"] = 'gold' if idx == 1 else 'silver' if idx == 2 else '#cd7f32' if idx == 3 else '#9ba3af'
-                spotlight["retired_kits"] = [
-                    {**k, "points": k.get("points")}
-                    for k in p.get("kits", []) if k.get("retired")
-                ]
-                spotlight["active_kits"] = [k for k in p.get("kits", []) if not k.get("retired")]
+                peak_by_mode = {}
+                for kit_item in p.get("kits", []):
+                    mode_name = kit_item.get("gamemode")
+                    tier_value = get_tier_value(kit_item.get("tier"))
+                    if not mode_name:
+                        continue
+                    existing = peak_by_mode.get(mode_name)
+                    if existing is None or tier_value > existing[0]:
+                        peak_by_mode[mode_name] = (tier_value, kit_item.get("tier"))
+
+                augmented_kits = []
+                for kit_item in p.get("kits", []):
+                    kit = dict(kit_item)
+                    mode_name = kit.get("gamemode")
+                    if kit.get("retired"):
+                        kit["hover_text"] = "Retired"
+                    else:
+                        peak_info = peak_by_mode.get(mode_name)
+                        peak_tier = peak_info[1] if peak_info else None
+                        kit["hover_text"] = f"Peak {peak_tier}" if peak_tier and peak_tier != kit.get("tier") else kit.get("tier")
+                    augmented_kits.append(kit)
+
+                spotlight["kits"] = augmented_kits
                 break
 
     template = """
@@ -345,7 +363,7 @@ def home():
                 <div style="font-weight:800; color:var(--accent); margin-bottom:10px; font-size:0.8rem;">FEATURED ELITES</div>
                 {% for h in high_p[:3] %}
                 <a href="/?search={{h.u}}" class="player-row" style="border-color: gold;">
-                    <div style="color:gold; font-weight:800;">TOP</div>
+                    <div style="color:gold; font-weight:800;">{% if loop.index == 1 %}TOP{% else %}&nbsp;{% endif %}</div>
                     <img src="{{ h.head_url }}">
                     <div>{{h.u}} <span class="badge" style="color:{{ h.rank_c }}">{{ h.rank }}</span></div>
                     <div style="color:{{h.reg_c}}">{{h.reg}}</div>
