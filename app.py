@@ -63,9 +63,27 @@ class DatabaseManager:
 db_mgr = DatabaseManager(MONGO_URI)
 
 # --- CORE LOGIC ---
+def normalize_tier(tier_name):
+    if not tier_name:
+        return ""
+    return str(tier_name).upper().strip()
+
+
+def normalize_mode(mode_name):
+    if not mode_name:
+        return ""
+    mode_name = str(mode_name).strip()
+    for mode in MODES:
+        if mode.lower() == mode_name.lower():
+            return mode
+    return mode_name
+
+
 def get_tier_value(tier_name):
-    try: return TIER_ORDER.index(tier_name.upper().strip()) + 1
-    except: return 0
+    try:
+        return TIER_ORDER.index(normalize_tier(tier_name)) + 1
+    except ValueError:
+        return 0
 
 def get_rank_info(tier_list):
     if not tier_list: return "Stone", RANK_COLORS["Stone"]
@@ -234,7 +252,7 @@ def home():
     if maint.get('active'): 
         return f"<html><head>{STYLE}</head><body style='display:flex; justify-content:center; align-items:center; height:100vh;'><div class='container' style='text-align:center;'><h1>🛠️ {maint.get('reason')}</h1></div></body></html>"
 
-    mode_q = request.args.get('mode', '').capitalize()
+    mode_q = normalize_mode(request.args.get('mode', ''))
     search_q = request.args.get('search', '').lower()
     
     raw = list(db_mgr.players.find({"banned": {"$ne": True}}))
@@ -255,7 +273,7 @@ def home():
             }
         
         users[u]["kits"].append(r)
-        if r['gamemode'].capitalize() == mode_q and not r.get('retired'):
+        if normalize_mode(r.get('gamemode')) == mode_q and not r.get('retired'):
             current_mode_tier = users[u].get("mode_tier")
             if current_mode_tier == "N/A" or get_tier_value(r['tier']) > get_tier_value(current_mode_tier):
                 users[u]["mode_tier"] = r['tier']
@@ -266,9 +284,9 @@ def home():
     top_mode_tiers = {}
     for data in users.values():
         for kit in data["kits"]:
-            if kit.get("retired"): 
+            if kit.get("retired"):
                 continue
-            mode_name = kit.get("gamemode")
+            mode_name = normalize_mode(kit.get("gamemode"))
             if not mode_name:
                 continue
             tier_value = get_tier_value(kit.get("tier"))
@@ -307,7 +325,7 @@ def home():
                 spotlight["placement_color"] = 'gold' if idx == 1 else 'silver' if idx == 2 else '#cd7f32' if idx == 3 else '#9ba3af'
                 peak_by_mode = {}
                 for kit_item in p.get("kits", []):
-                    mode_name = kit_item.get("gamemode")
+                    mode_name = normalize_mode(kit_item.get("gamemode"))
                     tier_value = get_tier_value(kit_item.get("tier"))
                     if not mode_name:
                         continue
