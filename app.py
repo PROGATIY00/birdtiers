@@ -73,28 +73,10 @@ def is_maintenance_active():
     return status if status is not None else {"active": False}
 
 # --- SKIN HELPERS ---
-TLAUNCHER_HEAD_ENDPOINTS = [
-    "https://api.tlauncher.org/skin/{username}?size={size}",
-    "https://auth.tlauncher.org/skin/{username}?size={size}",
-    "https://tlauncher.org/skin/{username}?size={size}",
-    "https://auth.tlauncher.org/launcher/api/v2/skin/{username}?size={size}",
-    "https://api.tlauncher.org/launcher/api/v2/skin/{username}?size={size}",
-]
 MOJANG_PROFILE_URL = "https://api.mojang.com/users/profiles/minecraft/{}"
 CRAFTATAR_HEAD_URL = "https://crafatar.com/avatars/{}?size={}&overlay"
 DEFAULT_HEAD_URL = "https://minotar.net/helm/{}/{}"
 UUID_CACHE = {}
-SKIN_CACHE = {}
-
-
-def fetch_image_url(url, timeout=5):
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            content_type = resp.headers.get("Content-Type", "")
-            return resp.status == 200 and content_type.startswith("image")
-    except Exception:
-        return False
 
 
 def get_mojang_uuid(username):
@@ -126,32 +108,15 @@ def is_premium_player(username):
 def get_premium_head_url(username, size=32):
     uuid = get_mojang_uuid(username)
     if not uuid:
-        return DEFAULT_HEAD_URL.format(urllib.parse.quote(username), size)
+        return DEFAULT_HEAD_URL.format(urllib.parse.quote(username or "Steve"), size)
     return CRAFTATAR_HEAD_URL.format(uuid, size)
 
 
-def get_tlauncher_head_url(username, size=32):
-    username = username.strip()
-    if not username:
-        return DEFAULT_HEAD_URL.format("Steve", size)
-    cache_key = f"{username}:{size}"
-    if cache_key in SKIN_CACHE:
-        return SKIN_CACHE[cache_key]
-    escaped = urllib.parse.quote(username)
-    for endpoint in TLAUNCHER_HEAD_ENDPOINTS:
-        url = endpoint.format(username=escaped, size=size)
-        if fetch_image_url(url, timeout=5):
-            SKIN_CACHE[cache_key] = url
-            return url
-    fallback = DEFAULT_HEAD_URL.format(escaped, size)
-    SKIN_CACHE[cache_key] = fallback
-    return fallback
-
-
 def get_player_head_url(username, size=32):
+    username = (username or "").strip()
     if is_premium_player(username):
         return get_premium_head_url(username, size)
-    return get_tlauncher_head_url(username, size)
+    return DEFAULT_HEAD_URL.format(urllib.parse.quote(username or "Steve"), size)
 
 # --- DISCORD BOT ---
 class MagmaBot(discord.Client):
@@ -184,7 +149,7 @@ STYLE = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;800&display=swap');
     :root { --bg: #0b0c10; --card: #14171f; --accent: #ff4500; --text: #f0f2f5; --border: #262932; }
-    body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
+    body { background: var(--bg) url('https://www.google.com/imgres?q=minecraft%20magma%20wallpaper&imgurl=http%3A%2F%2Fthe-minecraft.fr%2Fupload%2Fdefault%2FMinecraft-17.png&imgrefurl=https%3A%2F%2Fthe-minecraft.fr%2Fminecraft%2Fwallpaper%2Fmagma-cube&docid=0EMqd3-zkvIWdM&tbnid=enXoW6g-XR5mDM&vet=12ahUKEwjL2rPympuUAxVlhv0HHYlDAEAQnPAOegQIfRAB..i&w=1920&h=1080&hcb=2&ved=2ahUKEwjL2rPympuUAxVlhv0HHYlDAEAQnPAOegQIfRAB') no-repeat center center fixed; background-size: cover; color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
     .header { background: #0f1117; padding: 1rem 2rem; border-bottom: 2px solid var(--accent); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; }
     .nav-links { display: flex; gap: 15px; align-items: center; }
     .nav-links a { color: #9ba3af; text-decoration: none; font-weight: 600; font-size: 0.9rem; transition: 0.2s; }
