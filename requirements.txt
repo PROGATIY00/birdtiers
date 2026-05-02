@@ -1,5 +1,6 @@
 Flask
 discord.py
-gunicorn
 pymongo
 dnspython
+flask-discord
+gunicorn
