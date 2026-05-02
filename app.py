@@ -171,7 +171,7 @@ def home():
             </div>
             <div style="display:flex; gap:10px; align-items:center;">
                 <form action="/" style="margin:0;"><input name="search" placeholder="Search..."></form>
-                <a href="/moderation" style="color:#666; text-decoration:none; font-size:0.8rem;">Mod</a>
+                
             </div>
         </div>
 
