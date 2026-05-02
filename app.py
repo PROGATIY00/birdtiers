@@ -123,8 +123,8 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     chan = HIGH_RESULTS_ID if new_value >= 5 else LOG_CHANNEL_ID
     if chan:
         c = bot.get_channel(int(chan))
-       
-        if c: await c.send(f"{discord_user.mention}\n{player} {status} to {t_up} in {mode}")
+        if c:
+            await c.send(f"{discord_user.mention}\n{player} {status} to {t_up} in {mode}")
     await interaction.response.send_message(f"Updated {player}", ephemeral=True)
 
 @bot.tree.command(name="maintenance")
@@ -220,6 +220,8 @@ STYLE = """
     .tier-card.retired { opacity: 0.45; filter: grayscale(100%); border-color: rgba(155, 163, 175, 0.3); background: rgba(255,255,255,0.02); }
     .tier-card.retired .tier-label { color: #7f8ca1; }
     .tier-card.retired .tier-icon-img { opacity: 0.6; }
+    .tier-card.top-mode { border-color: #ffd700; box-shadow: 0 0 0 2px rgba(255,215,0,0.35), 0 0 18px rgba(255,215,0,0.12); }
+    .tier-card.top-mode .tier-label { color: #ffd700; }
     .tier-icon-img { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display:block; object-fit: contain; }
     .tier-label { color: #d8dde7; font-size: 0.85rem; font-weight: 800; }
 </style>
@@ -259,6 +261,19 @@ def home():
             
         if not r.get('retired'):
             users[u]["tiers"].append(r['tier'])
+
+    top_mode_tiers = {}
+    for data in users.values():
+        for kit in data["kits"]:
+            if kit.get("retired"): 
+                continue
+            mode_name = kit.get("gamemode")
+            if not mode_name:
+                continue
+            tier_value = get_tier_value(kit.get("tier"))
+            existing = top_mode_tiers.get(mode_name)
+            if existing is None or tier_value > existing["tier_value"]:
+                top_mode_tiers[mode_name] = {"tier_value": tier_value, "tier": kit.get("tier")}
 
     processed = []
     spotlight = None
@@ -311,8 +326,10 @@ def home():
                 for kit in peak_by_mode.values():
                     if kit["retired"]:
                         kit["hover_text"] = "Retired"
+                        kit["top_mode"] = False
                     else:
                         kit["hover_text"] = f"Peak {kit['tier']}"
+                        kit["top_mode"] = (top_mode_tiers.get(kit["gamemode"], {}).get("tier_value") == kit["tier_value"])
                     augmented_kits.append(kit)
 
                 spotlight["kits"] = augmented_kits
@@ -360,7 +377,7 @@ def home():
                         <h3>TIERS</h3>
                         <div class="tier-grid">
                             {% for k in spot.kits %}
-                            <div class="tier-card{% if k.retired %} retired{% endif %}" title="{{ k.hover_text }}">
+                            <div class="tier-card{% if k.retired %} retired{% endif %}{% if k.top_mode %} top-mode{% endif %}" title="{{ k.hover_text }}">
                                 <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img" alt="{{ k.gamemode }} icon">
                                 <div class="tier-label">{{ k.gamemode }} · {{ k.tier }}</div>
                             </div>
