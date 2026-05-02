@@ -260,6 +260,11 @@ def home():
 
     for r in raw:
         u = r['username']
+        normalized_gamemode = normalize_mode(r.get('gamemode'))
+        normalized_tier = normalize_tier(r.get('tier'))
+        r['_normalized_gamemode'] = normalized_gamemode
+        r['_normalized_tier'] = normalized_tier
+
         if u not in users:
             reg = r.get('region', 'NA').strip().upper()
             users[u] = {
@@ -273,26 +278,26 @@ def home():
             }
         
         users[u]["kits"].append(r)
-        if normalize_mode(r.get('gamemode')) == mode_q and not r.get('retired'):
+        if normalized_gamemode == mode_q and not r.get('retired'):
             current_mode_tier = users[u].get("mode_tier")
-            if current_mode_tier == "N/A" or get_tier_value(r['tier']) > get_tier_value(current_mode_tier):
-                users[u]["mode_tier"] = r['tier']
+            if current_mode_tier == "N/A" or get_tier_value(normalized_tier) > get_tier_value(current_mode_tier):
+                users[u]["mode_tier"] = normalized_tier
             
         if not r.get('retired'):
-            users[u]["tiers"].append(r['tier'])
+            users[u]["tiers"].append(normalized_tier)
 
     top_mode_tiers = {}
     for data in users.values():
         for kit in data["kits"]:
             if kit.get("retired"):
                 continue
-            mode_name = normalize_mode(kit.get("gamemode"))
+            mode_name = kit.get("_normalized_gamemode")
             if not mode_name:
                 continue
-            tier_value = get_tier_value(kit.get("tier"))
+            tier_value = get_tier_value(kit.get("_normalized_tier"))
             existing = top_mode_tiers.get(mode_name)
             if existing is None or tier_value > existing["tier_value"]:
-                top_mode_tiers[mode_name] = {"tier_value": tier_value, "tier": kit.get("tier")}
+                top_mode_tiers[mode_name] = {"tier_value": tier_value, "tier": kit.get("_normalized_tier")}
 
     processed = []
     spotlight = None
@@ -325,8 +330,8 @@ def home():
                 spotlight["placement_color"] = 'gold' if idx == 1 else 'silver' if idx == 2 else '#cd7f32' if idx == 3 else '#9ba3af'
                 peak_by_mode = {}
                 for kit_item in p.get("kits", []):
-                    mode_name = normalize_mode(kit_item.get("gamemode"))
-                    tier_value = get_tier_value(kit_item.get("tier"))
+                    mode_name = kit_item.get("_normalized_gamemode") or normalize_mode(kit_item.get("gamemode"))
+                    tier_value = get_tier_value(kit_item.get("_normalized_tier") or kit_item.get("tier"))
                     if not mode_name:
                         continue
                     existing = peak_by_mode.get(mode_name)
@@ -336,7 +341,7 @@ def home():
                     ):
                         peak_by_mode[mode_name] = {
                             "gamemode": mode_name,
-                            "tier": kit_item.get("tier"),
+                            "tier": kit_item.get("_normalized_tier") or kit_item.get("tier"),
                             "tier_value": tier_value,
                             "retired": retired
                         }
