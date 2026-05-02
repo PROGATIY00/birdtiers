@@ -123,7 +123,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     chan = HIGH_RESULTS_ID if new_value >= 5 else LOG_CHANNEL_ID
     if chan:
         c = bot.get_channel(int(chan))
-        if c: await c.send(f"**{player}** updated to **{t_up}** ({mode})")
+       
         if c: await c.send(f"{discord_user.mention}\n{player} {status} to {t_up} in {mode}")
     await interaction.response.send_message(f"Updated {player}", ephemeral=True)
 
@@ -186,6 +186,9 @@ STYLE = """
     .container { max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
     .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; margin-bottom: 0.8rem; display: grid; grid-template-columns: 50px 50px 1fr 80px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
     .player-row:hover { border-color: var(--accent); transform: scale(1.01); }
+    .player-row.top-player { border-color: gold; box-shadow: 0 0 20px rgba(255, 215, 0, 0.18); background: linear-gradient(135deg, rgba(255,215,0,0.08), rgba(17,23,34,0.96)); }
+    .player-row.top-player:hover { transform: scale(1.02); }
+    .top-badge { margin-left: 0.75rem; color: #ffd700; font-size: 0.75rem; font-weight: 800; background: rgba(255,215,0,0.12); padding: 3px 8px; border-radius: 999px; }
     .badge { padding: 2px 10px; border-radius: 20px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; border: 1px solid currentColor; }
     .reg-tag { font-weight: 800; font-size: 0.85rem; }
     .high-results { background: rgba(255, 69, 0, 0.05); border-left: 5px solid var(--accent); padding: 20px; border-radius: 0 15px 15px 0; margin-bottom: 30px; }
@@ -400,10 +403,10 @@ def home():
             {% else %}
             {% for p in players %}
             {% set placement_color = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
-            <a href="/?search={{ p.u }}&mode={{m}}" class="player-row">
+            <a href="/?search={{ p.u }}&mode={{m}}" class="player-row{% if m and loop.index == 1 %} top-player{% endif %}">
                 <div style="font-weight:800; color:{{ placement_color }};">#{{ loop.index }}</div>
                 <img src="{{ p.head_url }}">
-                <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }}; margin-left:10px;">{{ p.rank }}</span></div>
+                <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }}; margin-left:10px;">{{ p.rank }}</span>{% if m and loop.index == 1 %}<span class="top-badge">TOP</span>{% endif %}</div>
                 <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
                 <div style="text-align:right; color:var(--accent); font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
             </a>
