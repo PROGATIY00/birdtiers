@@ -1,8 +1,7 @@
 """
-MAGMATIERS INTEGRATED SYSTEM - VERSION 4.5.1
-- Fixes f-string SyntaxError in Template
-- Maintains Gold/Silver/Bronze/Iron Ranking
-- Full Report & Moderation System
+MAGMATIERS INTEGRATED SYSTEM - VERSION 4.5.2
+- Hidden MOD button from public navigation.
+- Fixed template rendering to avoid SyntaxErrors.
 """
 
 import discord
@@ -119,16 +118,6 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 
     await interaction.response.send_message(f"✅ Updated **{player}**.", ephemeral=True)
 
-@bot.tree.command(name="retire", description="Mark a player as retired")
-@app_commands.choices(mode=[app_commands.Choice(name=m, value=m) for m in MODES])
-async def retire(interaction: discord.Interaction, player: str, mode: app_commands.Choice[str]):
-    if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("❌ Permissions required.", ephemeral=True)
-    db_manager.players.update_one({"username": player, "gamemode": mode.value}, {"$set": {"retired": True}})
-    log_chan = bot.get_channel(int(LOG_CHANNEL_ID))
-    if log_chan: await log_chan.send(content=f"**{player}** has retired in **{mode.value}**")
-    await interaction.response.send_message(f"✅ **{player}** retired from **{mode.value}**.", ephemeral=True)
-
 # --- WEB UI ASSETS ---
 BASE_STYLE = """
 <style>
@@ -159,7 +148,6 @@ NAV_HTML = """
     <a href="/" class="logo">Magma<span>TIERS</span></a>
     <div>
         <a href="/report" class="nav-btn">REPORT</a>
-        <a href="/moderation" class="nav-btn" style="margin-left:5px;">MOD</a>
     </div>
 </div>
 """
@@ -169,7 +157,6 @@ app = Flask(__name__)
 
 @app.route('/')
 def index():
-    m_stat = get_maintenance_status()
     mode_q = request.args.get('mode', '').lower()
     search_q = request.args.get('search', '').lower()
     
