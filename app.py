@@ -200,7 +200,11 @@ STYLE = """
     .retired-label { font-weight: 800; color: #ffffff; }
     .retired-points { font-size: 0.9rem; color: #9ba3af; }
     .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 12px; }
-    .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align:center; }
+    .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align:center; transition: transform 0.2s ease, opacity 0.2s ease; }
+    .tier-card:hover { transform: translateY(-2px); }
+    .tier-card.retired { opacity: 0.45; filter: grayscale(100%); border-color: rgba(155, 163, 175, 0.3); background: rgba(255,255,255,0.02); }
+    .tier-card.retired .tier-label { color: #7f8ca1; }
+    .tier-card.retired .tier-icon-img { opacity: 0.6; }
     .tier-icon-img { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display:block; object-fit: contain; }
     .tier-label { color: #d8dde7; font-size: 0.85rem; font-weight: 800; }
 </style>
@@ -234,7 +238,9 @@ def home():
         
         users[u]["kits"].append(r)
         if r['gamemode'].capitalize() == mode_q:
-            users[u]["mode_tier"] = r['tier']
+            current_mode_tier = users[u].get("mode_tier")
+            if current_mode_tier == "N/A" or get_tier_value(r['tier']) > get_tier_value(current_mode_tier):
+                users[u]["mode_tier"] = r['tier']
             
         if not r.get('retired'):
             users[u]["tiers"].append(r['tier'])
@@ -275,16 +281,27 @@ def home():
                     if existing is None or tier_value > existing[0]:
                         peak_by_mode[mode_name] = (tier_value, kit_item.get("tier"))
 
-                augmented_kits = []
+                peak_by_mode = {}
                 for kit_item in p.get("kits", []):
-                    kit = dict(kit_item)
-                    mode_name = kit.get("gamemode")
-                    if kit.get("retired"):
-                        kit["hover_text"] = "Retired"
-                    else:
-                        peak_info = peak_by_mode.get(mode_name)
-                        peak_tier = peak_info[1] if peak_info else None
-                        kit["hover_text"] = f"Peak {peak_tier}" if peak_tier and peak_tier != kit.get("tier") else kit.get("tier")
+                    mode_name = kit_item.get("gamemode")
+                    tier_value = get_tier_value(kit_item.get("tier"))
+                    if not mode_name:
+                        continue
+                    existing = peak_by_mode.get(mode_name)
+                    retired = kit_item.get("retired", False)
+                    if existing is None or tier_value > existing["tier_value"] or (
+                        tier_value == existing["tier_value"] and existing["retired"] and not retired
+                    ):
+                        peak_by_mode[mode_name] = {
+                            "gamemode": mode_name,
+                            "tier": kit_item.get("tier"),
+                            "tier_value": tier_value,
+                            "retired": retired
+                        }
+
+                augmented_kits = []
+                for kit in peak_by_mode.values():
+                    kit["hover_text"] = "Retired" if kit["retired"] else kit["tier"]
                     augmented_kits.append(kit)
 
                 spotlight["kits"] = augmented_kits
@@ -328,26 +345,13 @@ def home():
                             <div class="position-points">({{ spot.score }} points)</div>
                         </div>
                     </div>
-                    {% if spot.retired_kits %}
-                    <div class="profile-section">
-                        <h3>RETIRED</h3>
-                        {% for k in spot.retired_kits %}
-                        <div class="retired-card">
-                            <div class="retired-label">Retired {{ k.tier }}</div>
-                            {% if k.points %}
-                            <div class="retired-points">({{ k.points }} points)</div>
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                    </div>
-                    {% endif %}
                     <div class="profile-section">
                         <h3>TIERS</h3>
                         <div class="tier-grid">
-                            {% for k in spot.active_kits %}
-                            <div class="tier-card">
+                            {% for k in spot.kits %}
+                            <div class="tier-card{% if k.retired %} retired{% endif %}" title="{{ k.hover_text }}">
                                 <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img" alt="{{ k.gamemode }} icon">
-                                <div class="tier-label">{{ k.tier }}</div>
+                                <div class="tier-label">{{ k.gamemode }} · {{ k.tier }}</div>
                             </div>
                             {% endfor %}
                         </div>
