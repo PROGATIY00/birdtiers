@@ -1,4 +1,3 @@
-
 import discord
 from discord import app_commands
 from flask import Flask, render_template_string, request, redirect, url_for
@@ -11,8 +10,9 @@ import datetime
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
-LOG_CHANNEL_ID = os.getenv("LOG_CHANNEL_ID")
-HIGH_RESULTS_ID = os.getenv("HIGH_RESULTS_ID")
+# Discord IDs must be integers
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
+HIGH_RESULTS_ID = int(os.getenv("HIGH_RESULTS_ID")) if os.getenv("HIGH_RESULTS_ID") else None
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
@@ -44,40 +44,39 @@ DEFAULT_GAMEMODE_ICON_URL = "https://img.icons8.com/ios-filled/64/ffffff/questio
 
 # --- DATABASE ---
 class DummyCollection:
-    def find(self, *args, **kwargs):
-        return []
-    def find_one(self, *args, **kwargs):
-        return None
-    def update_one(self, *args, **kwargs):
-        return None
+    def find(self, *args, **kwargs): return []
+    def find_one(self, *args, **kwargs): return None
+    def update_one(self, *args, **kwargs): return None
+    def update_many(self, *args, **kwargs): return type('obj', (object,), {'modified_count': 0})
 
 class DatabaseManager:
     def __init__(self, uri):
         self.client = MongoClient(uri) if uri else None
-        self.db = self.client['magmatiers_db'] if self.client is not None else None
-        collection = self.db is not None
-        self.players = self.db['players'] if collection else DummyCollection()
-        self.settings = self.db['settings'] if collection else DummyCollection()
-        self.reports = self.db['reports'] if collection else DummyCollection()
+        self.db = self.client['magmatiers_db'] if self.client else None
+        
+        if self.db is not None:
+            self.players = self.db['players']
+            self.settings = self.db['settings']
+            self.reports = self.db['reports']
+        else:
+            self.players = DummyCollection()
+            self.settings = DummyCollection()
+            self.reports = DummyCollection()
 
 db_mgr = DatabaseManager(MONGO_URI)
 
 # --- CORE LOGIC ---
 def normalize_tier(tier_name):
-    if not tier_name:
-        return ""
+    if not tier_name: return ""
     return str(tier_name).upper().strip()
 
-
 def normalize_mode(mode_name):
-    if not mode_name:
-        return ""
+    if not mode_name: return ""
     mode_name = str(mode_name).strip()
     for mode in MODES:
         if mode.lower() == mode_name.lower():
             return mode
     return mode_name
-
 
 def get_tier_value(tier_name):
     try:
@@ -97,17 +96,15 @@ def get_rank_info(tier_list):
     return name, RANK_COLORS.get(name, "#ffffff")
 
 def is_maintenance_active():
-    if db_mgr.settings is None: return {"active": False}
     status = db_mgr.settings.find_one({"_id": "maintenance_mode"})
     return status if status is not None else {"active": False}
 
 # --- SKIN HELPERS ---
 DEFAULT_HEAD_URL = "https://minotar.net/helm/{}/{}"
 
-
 def get_player_head_url(username, size=32):
-    username = (username or "").strip()
-    return DEFAULT_HEAD_URL.format(username or "Steve", size)
+    username = (username or "Steve").strip()
+    return DEFAULT_HEAD_URL.format(username, size)
 
 # --- DISCORD BOT ---
 class MagmaBot(discord.Client):
@@ -120,22 +117,27 @@ bot = MagmaBot()
 
 @bot.tree.command(name="rank")
 async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: str, tier: str, region: str):
-    if not interaction.user.guild_permissions.manage_roles: return
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("No permission", ephemeral=True)
+    
     t_up = tier.upper().strip()
     existing = db_mgr.players.find_one({"username": player, "gamemode": mode})
     old_tier = existing.get("tier") if existing else None
     old_value = get_tier_value(old_tier) if old_tier else 0
     new_value = get_tier_value(t_up)
-    if new_value > old_value:
-        status = "promoted"
-    elif new_value < old_value:
-        status = "demoted"
-    else:
-        status = "updated"
+    
+    status = "promoted" if new_value > old_value else "demoted" if new_value < old_value else "updated"
 
     db_mgr.players.update_one(
         {"username": player, "gamemode": mode},
-        {"$set": {"tier": t_up, "region": region.upper(), "discord_id": discord_user.id, "retired": False, "banned": False, "ts": datetime.datetime.utcnow()}},
+        {"$set": {
+            "tier": t_up, 
+            "region": region.upper(), 
+            "discord_id": discord_user.id, 
+            "retired": False, 
+            "banned": False, 
+            "ts": datetime.datetime.utcnow()
+        }},
         upsert=True
     )
     await interaction.response.send_message(f"{discord_user.mention}\n{player} {status} to {t_up} in {mode}", ephemeral=True)
@@ -143,14 +145,15 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 @bot.tree.command(name="maintenance")
 async def maintenance(interaction: discord.Interaction, action: str, reason: str = None):
     if not interaction.user.guild_permissions.manage_roles: return
-    if action.lower() == "on":
+    action_lower = action.lower()
+    if action_lower == "on":
         db_mgr.settings.update_one(
             {"_id": "maintenance_mode"},
             {"$set": {"active": True, "reason": reason or "Maintenance in progress"}},
             upsert=True
         )
         await interaction.response.send_message("Maintenance mode enabled", ephemeral=True)
-    elif action.lower() == "off":
+    elif action_lower == "off":
         db_mgr.settings.update_one(
             {"_id": "maintenance_mode"},
             {"$set": {"active": False}},
@@ -167,10 +170,8 @@ async def retire(interaction: discord.Interaction, player: str):
         {"username": player},
         {"$set": {"retired": True, "ts": datetime.datetime.utcnow()}}
     )
-    if result.modified_count > 0:
-        await interaction.response.send_message(f"Retired {player}", ephemeral=True)
-    else:
-        await interaction.response.send_message(f"Player {player} not found", ephemeral=True)
+    msg = f"Retired {player}" if result.modified_count > 0 else f"Player {player} not found"
+    await interaction.response.send_message(msg, ephemeral=True)
 
 @bot.tree.command(name="ban")
 async def ban(interaction: discord.Interaction, player: str):
@@ -179,10 +180,8 @@ async def ban(interaction: discord.Interaction, player: str):
         {"username": player},
         {"$set": {"banned": True, "ts": datetime.datetime.utcnow()}}
     )
-    if result.modified_count > 0:
-        await interaction.response.send_message(f"Banned {player}", ephemeral=True)
-    else:
-        await interaction.response.send_message(f"Player {player} not found", ephemeral=True)
+    msg = f"Banned {player}" if result.modified_count > 0 else f"Player {player} not found"
+    await interaction.response.send_message(msg, ephemeral=True)
 
 # --- WEB UI ---
 app = Flask(__name__)
@@ -191,7 +190,7 @@ STYLE = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;800&display=swap');
     :root { --bg: #0b0c10; --card: #14171f; --accent: #ff4500; --text: #f0f2f5; --border: #262932; }
-    body { background: var(--bg) url('https://www.google.com/imgres?q=minecraft%20magma%20wallpaper&imgurl=http%3A%2F%2Fthe-minecraft.fr%2Fupload%2Fdefault%2FMinecraft-17.png&imgrefurl=https%3A%2F%2Fthe-minecraft.fr%2Fminecraft%2Fwallpaper%2Fmagma-cube&docid=0EMqd3-zkvIWdM&tbnid=enXoW6g-XR5mDM&vet=12ahUKEwjL2rPympuUAxVlhv0HHYlDAEAQnPAOegQIfRAB..i&w=1920&h=1080&hcb=2&ved=2ahUKEwjL2rPympuUAxVlhv0HHYlDAEAQnPAOegQIfRAB') no-repeat center center fixed; background-size: cover; color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
     .header { background: #0f1117; padding: 1rem 2rem; border-bottom: 2px solid var(--accent); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; }
     .nav-links { display: flex; gap: 15px; align-items: center; }
     .nav-links a { color: #9ba3af; text-decoration: none; font-weight: 600; font-size: 0.9rem; transition: 0.2s; }
@@ -200,9 +199,8 @@ STYLE = """
     .player-row { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; margin-bottom: 0.8rem; display: grid; grid-template-columns: 50px 50px 1fr 80px 100px; align-items: center; text-decoration: none; color: inherit; transition: 0.2s; }
     .player-row:hover { border-color: var(--accent); transform: scale(1.01); }
     .player-row.top-player { border-color: gold; box-shadow: 0 0 20px rgba(255, 215, 0, 0.18); background: linear-gradient(135deg, rgba(255,215,0,0.08), rgba(17,23,34,0.96)); }
-    .player-row.top-player:hover { transform: scale(1.02); }
-    .top-badge { margin-left: 0.75rem; color: #ffd700; font-size: 0.75rem; font-weight: 800; background: rgba(255,215,0,0.12); padding: 3px 8px; border-radius: 999px; }
     .badge { padding: 2px 10px; border-radius: 20px; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; border: 1px solid currentColor; }
+    .top-badge { margin-left: 0.75rem; color: #ffd700; font-size: 0.75rem; font-weight: 800; background: rgba(255,215,0,0.12); padding: 3px 8px; border-radius: 999px; }
     .reg-tag { font-weight: 800; font-size: 0.85rem; }
     .high-results { background: rgba(255, 69, 0, 0.05); border-left: 5px solid var(--accent); padding: 20px; border-radius: 0 15px 15px 0; margin-bottom: 30px; }
     input { background: var(--card); border: 1px solid var(--border); color: white; padding: 8px 15px; border-radius: 8px; outline: none; }
@@ -216,28 +214,18 @@ STYLE = """
     .profile-rank { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 16px; border-radius: 999px; background: rgba(255, 192, 100, 0.12); color: #f5c06d; border: 1px solid rgba(245,192,100,0.25); font-weight: 800; font-size: 0.9rem; }
     .profile-region { color: #8f9bb3; margin-top: 8px; font-size: 0.95rem; }
     .name-mc-button { display: inline-flex; align-items: center; gap: 8px; margin: 14px auto 0; padding: 10px 16px; border-radius: 999px; background: #0f1117; color: #d8dde7; text-decoration: none; border: 1px solid rgba(255,255,255,0.08); font-size: 0.9rem; }
-    .name-mc-button span { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:8px; background:#0b1320; font-size:0.9rem; }
     .profile-body { padding: 25px; background: #14171f; }
     .profile-section { margin-bottom: 18px; }
     .profile-section h3 { margin: 0 0 12px; font-size: 0.8rem; letter-spacing: 0.15em; color: #9ba3af; }
     .position-box { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 18px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
     .position-number { font-size: 1.4rem; font-weight: 800; color: #f5c06d; }
-    .position-title { font-size: 0.95rem; color: #e5e9f2; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; }
-    .position-points { font-size: 0.9rem; color: #9ba3af; text-align:right; }
-    .retired-card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 14px 16px; margin-bottom: 10px; display:flex; justify-content:space-between; align-items:center; }
-    .retired-label { font-weight: 800; color: #ffffff; }
-    .retired-points { font-size: 0.9rem; color: #9ba3af; }
     .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 12px; }
-    .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align:center; transition: transform 0.2s ease, opacity 0.2s ease; }
-    .tier-card:hover { transform: translateY(-2px); }
-    .tier-card.retired { opacity: 0.45; filter: grayscale(100%); border-color: rgba(155, 163, 175, 0.3); background: rgba(255,255,255,0.02); }
-    .tier-card.retired .tier-label { color: #7f8ca1; }
-    .tier-card.retired .tier-icon-img { opacity: 0.6; }
-    .tier-card.top-mode { border-color: #ffd700; box-shadow: 0 0 0 2px rgba(255,215,0,0.35), 0 0 18px rgba(255,215,0,0.12); }
-    .tier-card.top-mode .tier-label { color: #ffd700; }
+    .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align:center; transition: 0.2s; }
+    .tier-card.retired { opacity: 0.45; filter: grayscale(100%); }
+    .tier-card.top-mode { border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.2); }
     .tier-icon-img { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display:block; object-fit: contain; }
     .tier-label { color: #d8dde7; font-size: 0.85rem; font-weight: 800; }
-    .tier-subtext { color: #9ba3af; font-size: 0.75rem; margin-top: 6px; line-height: 1.25; }
+    .tier-subtext { color: #9ba3af; font-size: 0.75rem; margin-top: 6px; }
 </style>
 """
 
@@ -255,44 +243,38 @@ def home():
 
     for r in raw:
         u = r['username']
-        normalized_gamemode = normalize_mode(r.get('gamemode'))
-        normalized_tier = normalize_tier(r.get('tier'))
-        r['_normalized_gamemode'] = normalized_gamemode
-        r['_normalized_tier'] = normalized_tier
+        n_mode = normalize_mode(r.get('gamemode'))
+        n_tier = normalize_tier(r.get('tier'))
+        r['_normalized_gamemode'] = n_mode
+        r['_normalized_tier'] = n_tier
 
         if u not in users:
             reg = r.get('region', 'NA').strip().upper()
             users[u] = {
-                "u": u,
-                "tiers": [],
-                "kits": [],
-                "reg": reg,
+                "u": u, "tiers": [], "kits": [], "reg": reg,
                 "reg_c": REGION_COLORS.get(reg, "#fff"),
-                "mode_tier": "N/A",
-                "head_url": get_player_head_url(u, 32)
+                "mode_tier": "N/A", "head_url": get_player_head_url(u, 32)
             }
         
         users[u]["kits"].append(r)
-        if normalized_gamemode == mode_q and not r.get('retired'):
-            current_mode_tier = users[u].get("mode_tier")
-            if current_mode_tier == "N/A" or get_tier_value(normalized_tier) > get_tier_value(current_mode_tier):
-                users[u]["mode_tier"] = normalized_tier
+        if n_mode == mode_q and not r.get('retired'):
+            cur = users[u].get("mode_tier")
+            if cur == "N/A" or get_tier_value(n_tier) > get_tier_value(cur):
+                users[u]["mode_tier"] = n_tier
             
         if not r.get('retired'):
-            users[u]["tiers"].append(normalized_tier)
+            users[u]["tiers"].append(n_tier)
 
     top_mode_tiers = {}
     for data in users.values():
         for kit in data["kits"]:
-            if kit.get("retired"):
-                continue
-            mode_name = kit.get("_normalized_gamemode")
-            if not mode_name:
-                continue
-            tier_value = get_tier_value(kit.get("_normalized_tier"))
-            existing = top_mode_tiers.get(mode_name)
-            if existing is None or tier_value > existing["tier_value"]:
-                top_mode_tiers[mode_name] = {"tier_value": tier_value, "tier": kit.get("_normalized_tier")}
+            if kit.get("retired"): continue
+            m_name = kit.get("_normalized_gamemode")
+            if not m_name: continue
+            t_val = get_tier_value(kit.get("_normalized_tier"))
+            existing = top_mode_tiers.get(m_name)
+            if existing is None or t_val > existing["tier_value"]:
+                top_mode_tiers[m_name] = {"tier_value": t_val, "tier": kit.get("_normalized_tier")}
 
     processed = []
     spotlight = None
@@ -300,64 +282,44 @@ def home():
         data["rank"], data["rank_c"] = get_rank_info(data["tiers"])
         data["score"] = sum(get_tier_value(t) for t in data["tiers"])
         data["best"] = max(data["tiers"], key=get_tier_value) if data["tiers"] else "N/A"
-        
-        # Filter logic
         if mode_q and data["mode_tier"] == "N/A": continue
         processed.append(data)
 
-    if mode_q:
-        players = sorted(processed, key=lambda x: (get_tier_value(x['mode_tier']), x['score']), reverse=True)
-    else:
-        players = sorted(processed, key=lambda x: x['score'], reverse=True)
+    players = sorted(processed, key=lambda x: (get_tier_value(x['mode_tier']), x['score']) if mode_q else x['score'], reverse=True)
     high_p = [p for p in players if p['rank'] in ["Grandmaster", "Legend", "Master"]]
 
     if search_q:
         for idx, p in enumerate(players, 1):
             if p['u'].lower() == search_q:
                 spotlight = dict(p)
-                spotlight["head_url"] = get_player_head_url(p['u'], 80)
-                spotlight["position"] = idx
-                spotlight["position_label"] = mode_q.upper() if mode_q else "OVERALL"
-                spotlight["region_name"] = {
-                    "NA": "North America", "EU": "Europe", "AS": "Asia",
-                    "SA": "South America", "OC": "Oceania", "AF": "Africa"
-                }.get(p['reg'], p['reg'])
-                spotlight["placement_color"] = 'gold' if idx == 1 else 'silver' if idx == 2 else '#cd7f32' if idx == 3 else '#9ba3af'
+                spotlight.update({
+                    "head_url": get_player_head_url(p['u'], 80),
+                    "position": idx,
+                    "position_label": mode_q.upper() if mode_q else "OVERALL",
+                    "region_name": {"NA": "North America", "EU": "Europe", "AS": "Asia", "SA": "South America", "OC": "Oceania", "AF": "Africa"}.get(p['reg'], p['reg']),
+                    "placement_color": 'gold' if idx == 1 else 'silver' if idx == 2 else '#cd7f32' if idx == 3 else '#9ba3af'
+                })
+                
                 peak_by_mode = {}
                 for kit_item in p.get("kits", []):
-                    if kit_item.get("retired"):
-                        continue
-                    mode_name = kit_item.get("_normalized_gamemode") or normalize_mode(kit_item.get("gamemode"))
-                    tier_value = get_tier_value(kit_item.get("_normalized_tier") or kit_item.get("tier"))
-                    if not mode_name:
-                        continue
-                    existing = peak_by_mode.get(mode_name)
-                    retired = kit_item.get("retired", False)
-                    if existing is None or tier_value > existing["tier_value"] or (
-                        tier_value == existing["tier_value"] and existing["retired"] and not retired
-                    ):
-                        peak_by_mode[mode_name] = {
-                            "gamemode": mode_name,
-                            "tier": kit_item.get("_normalized_tier") or kit_item.get("tier"),
-                            "tier_value": tier_value,
-                            "retired": retired
-                        }
+                    km = kit_item.get("_normalized_gamemode")
+                    kt = kit_item.get("_normalized_tier")
+                    kv = get_tier_value(kt)
+                    if not km: continue
+                    ex = peak_by_mode.get(km)
+                    ret = kit_item.get("retired", False)
+                    if ex is None or kv > ex["tier_value"] or (kv == ex["tier_value"] and ex["retired"] and not ret):
+                        peak_by_mode[km] = {"gamemode": km, "tier": kt, "tier_value": kv, "retired": ret}
 
-                augmented_kits = []
+                spotlight["kits"] = []
                 for kit in peak_by_mode.values():
-                    if kit["retired"]:
-                        kit["hover_text"] = "Retired"
-                        kit["top_mode"] = False
-                    else:
-                        kit["hover_text"] = "Peak"
-                        kit["top_mode"] = (top_mode_tiers.get(kit["gamemode"], {}).get("tier_value") == kit["tier_value"])
-                    augmented_kits.append(kit)
-
-                spotlight["kits"] = augmented_kits
+                    kit["hover_text"] = "Retired" if kit["retired"] else "Peak"
+                    kit["top_mode"] = not kit["retired"] and (top_mode_tiers.get(kit["gamemode"], {}).get("tier_value") == kit["tier_value"])
+                    spotlight["kits"].append(kit)
                 break
 
     template = """
-    <html><head><meta http-equiv="refresh" content="15"><title>MagmaTIERS</title>{{ s|safe }}</head>
+    <html><head><meta http-equiv="refresh" content="30"><title>MagmaTIERS</title>{{ s|safe }}</head>
     <body>
         <div class="header">
             <a href="/" style="color:white; text-decoration:none; font-weight:800; font-size:1.6rem;">Magma<span style="color:var(--accent);">TIERS</span></a>
@@ -365,33 +327,28 @@ def home():
                 <a href="/" class="{% if not m %}active{% endif %}">Global</a>
                 {% for gm in modes %}<a href="/?mode={{gm}}" class="{% if m == gm %}active{% endif %}">{{gm}}</a>{% endfor %}
             </div>
-            <div style="display:flex; gap:10px; align-items:center;">
-                <form action="/" style="margin:0;"><input name="search" placeholder="Search..."></form>
-            
-            </div>
+            <form action="/" style="margin:0;"><input name="search" placeholder="Search..."></form>
         </div>
 
         {% if spot %}
         <div class="modal-bg" onclick="window.location.href='/?mode={{m}}'">
             <div class="profile-card" onclick="event.stopPropagation()">
                 <div class="profile-header">
-                    <div class="profile-avatar-wrapper" style="border-color: {{ spot.placement_color }}; box-shadow: 0 0 0 4px rgba(255,255,255,0.05), 0 0 0 6px {{ spot.placement_color }}33;">
+                    <div class="profile-avatar-wrapper" style="border-color: {{ spot.placement_color }};">
                         <img src="{{ spot.head_url }}" class="profile-avatar">
                     </div>
                     <h2 class="profile-name">{{ spot.u }}</h2>
                     <div class="profile-rank">🏆 {{ spot.rank }}</div>
                     <div class="profile-region">{{ spot.region_name }}</div>
-                    <a class="name-mc-button" href="https://namemc.com/profile/{{ spot.u }}" target="_blank">
-                        <span>N</span> NameMC
-                    </a>
+                    <a class="name-mc-button" href="https://namemc.com/profile/{{ spot.u }}" target="_blank">NameMC</a>
                 </div>
                 <div class="profile-body">
                     <div class="profile-section">
                         <h3>POSITION</h3>
                         <div class="position-box">
-                            <div class="position-number" style="color: {{ spot.placement_color or 'gold' }};">#{{ spot.position }}</div>
-                            <div class="position-title">{{ spot.position_label }} · {{ spot.best }}</div>
-                            <div class="position-points">({{ spot.score }} points)</div>
+                            <div class="position-number" style="color: {{ spot.placement_color }};">#{{ spot.position }}</div>
+                            <div style="font-weight:800;">{{ spot.position_label }} · {{ spot.best }}</div>
+                            <div style="color:#9ba3af;">({{ spot.score }} pts)</div>
                         </div>
                     </div>
                     <div class="profile-section">
@@ -399,7 +356,7 @@ def home():
                         <div class="tier-grid">
                             {% for k in spot.kits %}
                             <div class="tier-card{% if k.retired %} retired{% endif %}{% if k.top_mode %} top-mode{% endif %}" title="{{ k.hover_text }}">
-                                <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img" alt="{{ k.gamemode }} icon">
+                                <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img">
                                 <div class="tier-label">{{ k.gamemode }} · {{ k.tier }}</div>
                                 <div class="tier-subtext">{{ k.hover_text }}</div>
                             </div>
@@ -414,10 +371,10 @@ def home():
         <div class="container">
             {% if not m and not search and high_p %}
             <div class="high-results">
-                <div style="font-weight:800; color:var(--accent); margin-bottom:10px; font-size:0.8rem;">FEATURED ELITES</div>
+                <div style="font-weight:800; color:var(--accent); margin-bottom:10px;">FEATURED ELITES</div>
                 {% for h in high_p[:3] %}
                 <a href="/?search={{h.u}}" class="player-row" style="border-color: gold;">
-                    <div style="color:gold; font-weight:800;">{% if loop.index == 1 %}TOP{% else %}&nbsp;{% endif %}</div>
+                    <div style="color:gold; font-weight:800;">TOP</div>
                     <img src="{{ h.head_url }}">
                     <div>{{h.u}} <span class="badge" style="color:{{ h.rank_c }}">{{ h.rank }}</span></div>
                     <div style="color:{{h.reg_c}}">{{h.reg}}</div>
@@ -427,38 +384,20 @@ def home():
             </div>
             {% endif %}
 
-            {% if m and not players %}
-            <div style="text-align:center; padding:50px; color:#9ba3af; font-size:1.2rem;">
-                <div style="font-size:2rem; margin-bottom:10px;">🥱</div>
-                Oh oh. Looks like it's empty
-            </div>
-            {% else %}
             {% for p in players %}
-            {% set placement_color = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
+            {% set pc = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
             <a href="/?search={{ p.u }}&mode={{m}}" class="player-row{% if m and loop.index == 1 %} top-player{% endif %}">
-                <div style="font-weight:800; color:{{ placement_color }};">#{{ loop.index }}</div>
+                <div style="font-weight:800; color:{{ pc }};">#{{ loop.index }}</div>
                 <img src="{{ p.head_url }}">
-                <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }}; margin-left:10px;">{{ p.rank }}</span>{% if m and loop.index == 1 %}<span class="top-badge">TOP</span>{% endif %}</div>
+                <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }}; margin-left:10px;">{{ p.rank }}</span></div>
                 <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
                 <div style="text-align:right; color:var(--accent); font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
             </a>
             {% endfor %}
-            {% endif %}
         </div>
     </body></html>
     """
-    return render_template_string(
-        template,
-        s=STYLE,
-        players=players,
-        spot=spotlight,
-        modes=MODES,
-        m=mode_q,
-        search=search_q,
-        high_p=high_p,
-        mode_icon_urls=GAMEMODE_ICON_URLS,
-        default_icon_url=DEFAULT_GAMEMODE_ICON_URL
-    )
+    return render_template_string(template, s=STYLE, players=players, spot=spotlight, modes=MODES, m=mode_q, search=search_q, high_p=high_p, mode_icon_urls=GAMEMODE_ICON_URLS, default_icon_url=DEFAULT_GAMEMODE_ICON_URL)
 
 @app.route('/moderation')
 def moderation():
@@ -471,8 +410,8 @@ def moderation():
             <h3>{{ r.player }}</h3><p>{{ r.reason }}</p>
             <form action="/moderation/resolve" method="POST">
                 <input type="hidden" name="id" value="{{ r._id }}">
-                <button name="a" value="approve" style="background:green; color:white; border:none; padding:10px; border-radius:5px;">Approve</button>
-                <button name="a" value="decline" style="background:#444; color:white; border:none; padding:10px; border-radius:5px;">Decline</button>
+                <button name="a" value="approve" style="background:green; color:white; border:none; padding:10px; border-radius:5px; cursor:pointer;">Approve</button>
+                <button name="a" value="decline" style="background:#444; color:white; border:none; padding:10px; border-radius:5px; cursor:pointer;">Decline</button>
             </form>
         </div>
         {% endfor %}
@@ -487,5 +426,6 @@ def resolve():
     return redirect(url_for('moderation'))
 
 if __name__ == "__main__":
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
+    # Flask runs in a thread to allow Discord bot to run concurrently
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False), daemon=True).start()
     bot.run(TOKEN)
