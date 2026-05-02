@@ -249,7 +249,7 @@ def home():
             }
         
         users[u]["kits"].append(r)
-        if r['gamemode'].capitalize() == mode_q:
+        if r['gamemode'].capitalize() == mode_q and not r.get('retired'):
             current_mode_tier = users[u].get("mode_tier")
             if current_mode_tier == "N/A" or get_tier_value(r['tier']) > get_tier_value(current_mode_tier):
                 users[u]["mode_tier"] = r['tier']
