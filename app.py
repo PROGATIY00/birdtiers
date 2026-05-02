@@ -4,13 +4,9 @@ from discord import app_commands
 from flask import Flask, render_template_string, request, redirect, url_for
 from pymongo import MongoClient
 from bson.objectid import ObjectId
-import json
 import os
 import threading
 import datetime
-import urllib.parse
-import urllib.request
-import urllib.error
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TOKEN")
@@ -73,49 +69,11 @@ def is_maintenance_active():
     return status if status is not None else {"active": False}
 
 # --- SKIN HELPERS ---
-MOJANG_PROFILE_URL = "https://api.mojang.com/users/profiles/minecraft/{}"
-CRAFTATAR_HEAD_URL = "https://crafatar.com/avatars/{}?size={}&overlay"
 DEFAULT_HEAD_URL = "https://minotar.net/helm/{}/{}"
-UUID_CACHE = {}
-
-
-def get_mojang_uuid(username):
-    username = username.strip()
-    if not username:
-        return None
-    if username in UUID_CACHE:
-        return UUID_CACHE[username]
-    try:
-        url = MOJANG_PROFILE_URL.format(urllib.parse.quote(username))
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            if resp.status != 200:
-                UUID_CACHE[username] = None
-                return None
-            data = json.loads(resp.read().decode("utf-8"))
-            uuid = data.get("id")
-            UUID_CACHE[username] = uuid
-            return uuid
-    except Exception:
-        UUID_CACHE[username] = None
-        return None
-
-
-def is_premium_player(username):
-    return get_mojang_uuid(username) is not None
-
-
-def get_premium_head_url(username, size=32):
-    uuid = get_mojang_uuid(username)
-    if not uuid:
-        return DEFAULT_HEAD_URL.format(urllib.parse.quote(username or "Steve"), size)
-    return CRAFTATAR_HEAD_URL.format(uuid, size)
 
 
 def get_player_head_url(username, size=32):
     username = (username or "").strip()
-    if is_premium_player(username):
-        return get_premium_head_url(username, size)
     return DEFAULT_HEAD_URL.format(urllib.parse.quote(username or "Steve"), size)
 
 # --- DISCORD BOT ---
