@@ -296,16 +296,6 @@ def home():
                     if not mode_name:
                         continue
                     existing = peak_by_mode.get(mode_name)
-                    if existing is None or tier_value > existing[0]:
-                        peak_by_mode[mode_name] = (tier_value, kit_item.get("tier"))
-
-                peak_by_mode = {}
-                for kit_item in p.get("kits", []):
-                    mode_name = kit_item.get("gamemode")
-                    tier_value = get_tier_value(kit_item.get("tier"))
-                    if not mode_name:
-                        continue
-                    existing = peak_by_mode.get(mode_name)
                     retired = kit_item.get("retired", False)
                     if existing is None or tier_value > existing["tier_value"] or (
                         tier_value == existing["tier_value"] and existing["retired"] and not retired
@@ -319,7 +309,10 @@ def home():
 
                 augmented_kits = []
                 for kit in peak_by_mode.values():
-                    kit["hover_text"] = "Retired" if kit["retired"] else kit["tier"]
+                    if kit["retired"]:
+                        kit["hover_text"] = "Retired"
+                    else:
+                        kit["hover_text"] = f"Peak {kit['tier']}"
                     augmented_kits.append(kit)
 
                 spotlight["kits"] = augmented_kits
