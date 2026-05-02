@@ -246,6 +246,7 @@ def home():
                     "NA": "North America", "EU": "Europe", "AS": "Asia",
                     "SA": "South America", "OC": "Oceania", "AF": "Africa"
                 }.get(p['reg'], p['reg'])
+                spotlight["placement_color"] = 'gold' if idx == 1 else 'silver' if idx == 2 else '#cd7f32' if idx == 3 else '#9ba3af'
                 break
 
     template = """
@@ -267,7 +268,7 @@ def home():
         <div class="modal-bg" onclick="window.location.href='/?mode={{m}}'">
             <div class="profile-card" onclick="event.stopPropagation()">
                 <div class="profile-header">
-                    <div class="profile-avatar-wrapper">
+                    <div class="profile-avatar-wrapper" style="border-color: {{ spot.placement_color }}; box-shadow: 0 0 0 4px rgba(255,255,255,0.05), 0 0 0 6px {{ spot.placement_color }}33;">
                         <img src="{{ spot.head_url }}" class="profile-avatar">
                     </div>
                     <h2 class="profile-name">{{ spot.u }}</h2>
