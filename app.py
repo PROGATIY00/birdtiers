@@ -27,6 +27,21 @@ RANK_COLORS = {
     "Bronze": "#cd7f32", "Stone": "#a9a9a9"
 }
 
+GAMEMODE_ICON_URLS = {
+    "Crystal": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207086343028856/638965736295609752.png?ex=69f79839&is=69f646b9&hm=0c350e70e11723eadd3af6cfb3e66ff3384106d5856b8c325b1657a8befc9723&,
+    "UHC": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207572454740038/uhc-removebg-preview.png?ex=69f798ad&is=69f6472d&hm=3710a0412244706eeb5bdd513e3f8f1ffceaaa24677e7f8500bc09f27a131b85&",
+    "Pot": "https://cdn.discordapp.com/attachments/1499096668635926681/1500208443074674728/pot.png?ex=69f7997d&is=69f647fd&hm=3f370624f948b5ab005273c3662473b4f2259bbbee120a1296793ca597febb33&",
+    "SMP": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207572110676049/smp-removebg-preview.png?ex=69f798ad&is=69f6472d&hm=766dc148e3eecdfa38f87f7301f0b656c3d951595570c92a129d1e9e0827c7e6&",
+    "Axe": "https://cdn.discordapp.com/attachments/1499096668635926681/1500208594732187880/axe-removebg-preview.png?ex=69f799a1&is=69f64821&hm=39ff027bc798aa12f0f1ef27a86d6ff25ae36021cd8c3447a6eaf7579f606b9b&",
+    "Sword": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207397111599324/images-removebg-preview.png?ex=69f79883&is=69f64703&hm=e1a0fd6735471db20bc73396b8e6a38e555c04e634025ec348e01961000bf31a&",
+    "Mace": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207397497471013/mace.png?ex=69f79884&is=69f64704&hm=ea26d028830d582da976435d60cebaf3d45c0de5426e73a5c2a41a3f9d2a496b&",
+    "Cart": "https://img.icons8.com/ios-filled/64/ffffff/minecart.png",
+    "1.8": "https://img.icons8.com/ios-filled/64/ffffff/shield.png",
+    "Trident": "https://img.icons8.com/ios-filled/64/ffffff/trident.png",
+    "Spear": "https://img.icons8.com/ios-filled/64/ffffff/spear.png"
+}
+DEFAULT_GAMEMODE_ICON_URL = "https://img.icons8.com/ios-filled/64/ffffff/question-mark.png"
+
 # --- DATABASE ---
 class DummyCollection:
     def find(self, *args, **kwargs):
@@ -169,7 +184,7 @@ STYLE = """
     .profile-header { background: linear-gradient(180deg, #1a1e29 0%, #11141c 100%); padding: 35px 20px 25px; text-align: center; }
     .profile-avatar-wrapper { width: 120px; height: 120px; border-radius: 50%; border: 4px solid #f5c06d; display: inline-flex; justify-content: center; align-items: center; margin: 0 auto 15px; background: radial-gradient(circle at top, rgba(255,255,255,0.12), transparent 55%); }
     .profile-avatar { width: 104px; height: 104px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.12); object-fit: cover; }
-    .profile-name { margin: 0; font-size: 2rem; font-weight: 800; background: linear-gradient(90deg, #4da8ff, #c656ff); -webkit-background-clip: text; color: transparent; }
+    .profile-name { margin: 0; font-size: 2rem; font-weight: 800; color: #ffffff; }
     .profile-rank { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 16px; border-radius: 999px; background: rgba(255, 192, 100, 0.12); color: #f5c06d; border: 1px solid rgba(245,192,100,0.25); font-weight: 800; font-size: 0.9rem; }
     .profile-region { color: #8f9bb3; margin-top: 8px; font-size: 0.95rem; }
     .name-mc-button { display: inline-flex; align-items: center; gap: 8px; margin: 14px auto 0; padding: 10px 16px; border-radius: 999px; background: #0f1117; color: #d8dde7; text-decoration: none; border: 1px solid rgba(255,255,255,0.08); font-size: 0.9rem; }
@@ -183,7 +198,7 @@ STYLE = """
     .position-points { font-size: 0.9rem; color: #9ba3af; text-align:right; }
     .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 12px; }
     .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align:center; }
-    .tier-icon { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display:flex; justify-content:center; align-items:center; background: rgba(255,255,255,0.06); color: #fff; font-weight: 800; }
+    .tier-icon-img { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display:block; object-fit: contain; }
     .tier-label { color: #d8dde7; font-size: 0.85rem; font-weight: 800; }
 </style>
 """
@@ -282,7 +297,7 @@ def home():
                     <div class="profile-section">
                         <h3>POSITION</h3>
                         <div class="position-box">
-                            <div class="position-number">#{{ spot.position }}</div>
+                            <div class="position-number" style="color: {{ spot.placement_color or 'gold' }};">#{{ spot.position }}</div>
                             <div class="position-title">{{ spot.position_label }}</div>
                             <div class="position-points">({{ spot.score }} points)</div>
                         </div>
@@ -292,7 +307,7 @@ def home():
                         <div class="tier-grid">
                             {% for k in spot.kits %}
                             <div class="tier-card">
-                                <div class="tier-icon">{{ k.gamemode[:2].upper() }}</div>
+                                <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img" alt="{{ k.gamemode }} icon">
                                 <div class="tier-label">{{ k.tier }}</div>
                             </div>
                             {% endfor %}
@@ -339,7 +354,18 @@ def home():
         </div>
     </body></html>
     """
-    return render_template_string(template, s=STYLE, players=players, spot=spotlight, modes=MODES, m=mode_q, search=search_q, high_p=high_p)
+    return render_template_string(
+        template,
+        s=STYLE,
+        players=players,
+        spot=spotlight,
+        modes=MODES,
+        m=mode_q,
+        search=search_q,
+        high_p=high_p,
+        mode_icon_urls=GAMEMODE_ICON_URLS,
+        default_icon_url=DEFAULT_GAMEMODE_ICON_URL
+    )
 
 @app.route('/moderation')
 def moderation():
