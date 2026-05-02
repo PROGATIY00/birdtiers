@@ -1,4 +1,4 @@
-\
+
 import discord
 from discord import app_commands
 from flask import Flask, render_template_string, request, redirect, url_for
@@ -138,12 +138,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         {"$set": {"tier": t_up, "region": region.upper(), "discord_id": discord_user.id, "retired": False, "banned": False, "ts": datetime.datetime.utcnow()}},
         upsert=True
     )
-    chan = HIGH_RESULTS_ID if new_value >= 5 else LOG_CHANNEL_ID
-    if chan:
-        c = bot.get_channel(int(chan))
-        if c:
-            await c.send(f"{discord_user.mention}\n{player} {status} to {t_up} in {mode}")
-    await interaction.response.send_message(f"Updated {player}", ephemeral=True)
+    await interaction.response.send_message(f"{discord_user.mention}\n{player} {status} to {t_up} in {mode}", ephemeral=True)
 
 @bot.tree.command(name="maintenance")
 async def maintenance(interaction: discord.Interaction, action: str, reason: str = None):
@@ -330,6 +325,8 @@ def home():
                 spotlight["placement_color"] = 'gold' if idx == 1 else 'silver' if idx == 2 else '#cd7f32' if idx == 3 else '#9ba3af'
                 peak_by_mode = {}
                 for kit_item in p.get("kits", []):
+                    if kit_item.get("retired"):
+                        continue
                     mode_name = kit_item.get("_normalized_gamemode") or normalize_mode(kit_item.get("gamemode"))
                     tier_value = get_tier_value(kit_item.get("_normalized_tier") or kit_item.get("tier"))
                     if not mode_name:
