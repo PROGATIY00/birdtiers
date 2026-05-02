@@ -18,8 +18,8 @@ MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", 
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 
 REGION_COLORS = {
-    "NA": "#e60000", "EU": "#4d94ff", "AS": "#fc711d", 
-    "SA": "#4dff88", "OC": "#0059b3", "AF": "#ff9900"
+    "NA": "#ff4d4d", "EU": "#4d94ff", "AS": "#ffdb4d", 
+    "SA": "#4dff88", "OC": "#ff4dff", "AF": "#ffa64d"
 }
 RANK_COLORS = {
     "Grandmaster": "#ff0000", "Legend": "#ff8c00", 
