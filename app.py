@@ -256,7 +256,10 @@ def home():
         if mode_q and data["mode_tier"] == "N/A": continue
         processed.append(data)
 
-    players = sorted(processed, key=lambda x: x['score'], reverse=True)
+    if mode_q:
+        players = sorted(processed, key=lambda x: (get_tier_value(x['mode_tier']), x['score']), reverse=True)
+    else:
+        players = sorted(processed, key=lambda x: x['score'], reverse=True)
     high_p = [p for p in players if p['rank'] in ["Grandmaster", "Legend", "Master"]]
 
     if search_q:
