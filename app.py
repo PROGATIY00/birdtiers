@@ -140,7 +140,11 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         }},
         upsert=True
     )
-    await interaction.response.send_message(f"{discord_user.mention}\n{player} {status} to {t_up} in {mode}", ephemeral=True)
+    # log the change
+    log_channel = bot.get_channel(LOG_CHANNEL_ID) if LOG_CHANNEL_ID else None
+    if log_channel:
+        await log_channel.send(f"{player} was {status} to {t_up} in {mode} by {interaction.user.mention}")
+    await interaction.response.send_message(f"Updated!", ephemeral=True)
 
 @bot.tree.command(name="maintenance")
 async def maintenance(interaction: discord.Interaction, action: str, reason: str = None):
@@ -302,14 +306,16 @@ def home():
                 
                 peak_by_mode = {}
                 for kit_item in p.get("kits", []):
+                    if kit_item.get("retired"):
+                        continue
                     km = kit_item.get("_normalized_gamemode")
                     kt = kit_item.get("_normalized_tier")
                     kv = get_tier_value(kt)
-                    if not km: continue
+                    if not km:
+                        continue
                     ex = peak_by_mode.get(km)
-                    ret = kit_item.get("retired", False)
-                    if ex is None or kv > ex["tier_value"] or (kv == ex["tier_value"] and ex["retired"] and not ret):
-                        peak_by_mode[km] = {"gamemode": km, "tier": kt, "tier_value": kv, "retired": ret}
+                    if ex is None or kv > ex["tier_value"]:
+                        peak_by_mode[km] = {"gamemode": km, "tier": kt, "tier_value": kv, "retired": False}
 
                 spotlight["kits"] = []
                 for kit in peak_by_mode.values():
