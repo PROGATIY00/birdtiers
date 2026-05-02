@@ -306,21 +306,22 @@ def home():
                 
                 peak_by_mode = {}
                 for kit_item in p.get("kits", []):
-                    if kit_item.get("retired"):
+                    km = kit_item.get("_normalized_gamemode", "")
+                    kt = kit_item.get("_normalized_tier", "")
+                    if not km or not kt:
                         continue
-                    km = kit_item.get("_normalized_gamemode")
-                    kt = kit_item.get("_normalized_tier")
+                    if kit_item.get("retired", False):
+                        continue
+                    
                     kv = get_tier_value(kt)
-                    if not km:
-                        continue
-                    ex = peak_by_mode.get(km)
-                    if ex is None or kv > ex["tier_value"]:
-                        peak_by_mode[km] = {"gamemode": km, "tier": kt, "tier_value": kv, "retired": False}
+                    if km not in peak_by_mode or kv > peak_by_mode[km]["tier_value"]:
+                        peak_by_mode[km] = {"gamemode": km, "tier": kt, "tier_value": kv}
 
                 spotlight["kits"] = []
                 for kit in peak_by_mode.values():
-                    kit["hover_text"] = "Retired" if kit["retired"] else "Peak"
-                    kit["top_mode"] = not kit["retired"] and (top_mode_tiers.get(kit["gamemode"], {}).get("tier_value") == kit["tier_value"])
+                    is_top = top_mode_tiers.get(kit["gamemode"], {}).get("tier_value", 0) == kit["tier_value"]
+                    kit["hover_text"] = "Peak"
+                    kit["top_mode"] = is_top
                     spotlight["kits"].append(kit)
                 break
 
