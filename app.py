@@ -146,7 +146,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 
     log_channel = bot.get_channel(LOG_CHANNEL_ID) if LOG_CHANNEL_ID else None
     if log_channel:
-        await log_channel.send(f"{player} was {status} to {t_up} in {mode} by {interaction.user.mention}")
+        await log_channel.send(f"**{player}** was {status} to **{t_up}** in {mode}")
     await interaction.response.send_message(f"Updated!", ephemeral=True)
 
 @bot.tree.command(name="maintenance")
