@@ -31,7 +31,7 @@ GAMEMODE_ICON_URLS = {
     "UHC": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207572454740038/uhc-removebg-preview.png?ex=69f798ad&is=69f6472d&hm=3710a0412244706eeb5bdd513e3f8f1ffceaaa24677e7f8500bc09f27a131b85&",
     "Pot": "https://cdn.discordapp.com/attachments/1499096668635926681/1500208443074674728/pot.png?ex=69f7997d&is=69f647fd&hm=3f370624f948b5ab005273c3662473b4f2259bbbee120a1296793ca597febb33&",
     "SMP": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207572110676049/smp-removebg-preview.png?ex=69f798ad&is=69f6472d&hm=766dc148e3eecdfa38f87f7301f0b656c3d951595570c92a129d1e9e0827c7e6&",
-    "Axe": "https://cdn.discordapp.com/attachments/1499096668635926681/1500208594732187880/axe-removebg-preview.png?ex=69f799a1&is=69f64821&hm=39ff027bc798aa12f0f1ef27a68e6ff25ae36021cd8c3447a6eaf7579f606b9b&",
+    "Axe": "https://cdn.discordapp.com/attachments/1499096668635926681/1500208594732187880/axe-removebg-preview.png?ex=69f84261&is=69f6f0e1&hm=d8a3bf378379f57a464ad29293e1a1e14773466bc0e41176711664af07635473&",
     "Sword": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207397111599324/images-removebg-preview.png?ex=69f79883&is=69f64703&hm=e1a0fd6735471db20bc73396b8e6a38e555c04e634025ec348e01961000bf31a&",
     "Mace": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207397497471013/mace.png?ex=69f79884&is=69f64704&hm=ea26d028830d582da976435d60cebaf3d45c0de5426e73a5c2a41a3f9d2a496b&",
     "Cart": "https://img.icons8.com/ios-filled/64/ffffff/minecart.png",
