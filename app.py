@@ -114,7 +114,7 @@ class MagmaBot(discord.Client):
 bot = MagmaBot()
 
 @bot.tree.command(name="rank")
-async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: str, tier: str, region: str):
+async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: str, tier: str, region: str, reason: str):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("No permission", ephemeral=True)
 
@@ -146,7 +146,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 
     log_channel = bot.get_channel(LOG_CHANNEL_ID) if LOG_CHANNEL_ID else None
     if log_channel:
-        await log_channel.send(f"**{player}** was {status} to **{t_up}** in {mode}")
+        await log_channel.send(f"**{player}** was {status} to **{t_up}** in {mode} \n **Reason: {reason}**")
     await interaction.response.send_message(f"Updated!", ephemeral=True)
 
 @bot.tree.command(name="maintenance")
