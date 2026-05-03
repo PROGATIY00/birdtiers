@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request, redirect, url_for, jsonify
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 import os
@@ -489,6 +489,15 @@ def resolve():
     status = "Resolved" if request.form.get('a') == "approve" else "Declined"
     db_mgr.reports.update_one({"_id": ObjectId(request.form.get('id'))}, {"$set": {"status": status}})
     return redirect(url_for('moderation'))
+
+@app.route('/api/player/<username>/<mode>')
+def get_player_tier(username, mode):
+    n_mode = normalize_mode(mode)
+    player = db_mgr.players.find_one({"username": username, "gamemode": n_mode, "banned": {"$ne": True}})
+    if not player:
+        return jsonify({"error": "Player or mode not found"}), 404
+    tier = player.get("tier", "N/A")
+    return jsonify({"username": username, "mode": n_mode, "tier": tier})
 
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False), daemon=True).start()
