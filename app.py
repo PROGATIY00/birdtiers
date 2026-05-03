@@ -18,12 +18,12 @@ MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", 
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 
 REGION_COLORS = {
-    "NA": "#ff4d4d", "EU": "#4d94ff", "AS": "#ffdb4d", 
+    "NA": "#ff4d4d", "EU": "#4d94ff", "AS": "#ffdb4d",
     "SA": "#4dff88", "OC": "#ff4dff", "AF": "#ffa64d"
 }
 RANK_COLORS = {
-    "Grandmaster": "#ff0000", "Legend": "#ff8c00", 
-    "Master": "#9370db", "Elite": "#00ced1", 
+    "Grandmaster": "#ff0000", "Legend": "#ff8c00",
+    "Master": "#9370db", "Elite": "#00ced1",
     "Bronze": "#cd7f32", "Stone": "#a9a9a9"
 }
 
@@ -32,7 +32,7 @@ GAMEMODE_ICON_URLS = {
     "UHC": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207572454740038/uhc-removebg-preview.png?ex=69f798ad&is=69f6472d&hm=3710a0412244706eeb5bdd513e3f8f1ffceaaa24677e7f8500bc09f27a131b85&",
     "Pot": "https://cdn.discordapp.com/attachments/1499096668635926681/1500208443074674728/pot.png?ex=69f7997d&is=69f647fd&hm=3f370624f948b5ab005273c3662473b4f2259bbbee120a1296793ca597febb33&",
     "SMP": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207572110676049/smp-removebg-preview.png?ex=69f798ad&is=69f6472d&hm=766dc148e3eecdfa38f87f7301f0b656c3d951595570c92a129d1e9e0827c7e6&",
-    "Axe": "https://cdn.discordapp.com/attachments/1499096668635926681/1500208594732187880/axe-removebg-preview.png?ex=69f799a1&is=69f64821&hm=39ff027bc798aa12f0f1ef27a86d6ff25ae36021cd8c3447a6eaf7579f606b9b&",
+    "Axe": "https://cdn.discordapp.com/attachments/1499096668635926681/1500208594732187880/axe-removebg-preview.png?ex=69f799a1&is=69f64821&hm=39ff027bc798aa12f0f1ef27a68e6ff25ae36021cd8c3447a6eaf7579f606b9b&",
     "Sword": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207397111599324/images-removebg-preview.png?ex=69f79883&is=69f64703&hm=e1a0fd6735471db20bc73396b8e6a38e555c04e634025ec348e01961000bf31a&",
     "Mace": "https://cdn.discordapp.com/attachments/1499096668635926681/1500207397497471013/mace.png?ex=69f79884&is=69f64704&hm=ea26d028830d582da976435d60cebaf3d45c0de5426e73a5c2a41a3f9d2a496b&",
     "Cart": "https://img.icons8.com/ios-filled/64/ffffff/minecart.png",
@@ -53,7 +53,7 @@ class DatabaseManager:
     def __init__(self, uri):
         self.client = MongoClient(uri) if uri else None
         self.db = self.client['magmatiers_db'] if self.client else None
-        
+
         if self.db is not None:
             self.players = self.db['players']
             self.settings = self.db['settings']
@@ -119,23 +119,23 @@ bot = MagmaBot()
 async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: str, tier: str, region: str):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("No permission", ephemeral=True)
-    
+
     t_up = tier.upper().strip()
     existing = db_mgr.players.find_one({"username": player, "gamemode": mode})
     old_tier = existing.get("tier") if existing else None
     old_value = get_tier_value(old_tier) if old_tier else 0
     new_value = get_tier_value(t_up)
-    
+
     status = "promoted" if new_value > old_value else "demoted" if new_value < old_value else "updated"
 
     db_mgr.players.update_one(
         {"username": player, "gamemode": mode},
         {"$set": {
-            "tier": t_up, 
-            "region": region.upper(), 
-            "discord_id": discord_user.id, 
-            "retired": False, 
-            "banned": False, 
+            "tier": t_up,
+            "region": region.upper(),
+            "discord_id": discord_user.id,
+            "retired": False,
+            "banned": False,
             "ts": datetime.datetime.utcnow()
         }},
         upsert=True
@@ -208,7 +208,7 @@ STYLE = """
     .reg-tag { font-weight: 800; font-size: 0.85rem; }
     .high-results { background: rgba(255, 69, 0, 0.05); border-left: 5px solid var(--accent); padding: 20px; border-radius: 0 15px 15px 0; margin-bottom: 30px; }
     input { background: var(--card); border: 1px solid var(--border); color: white; padding: 8px 15px; border-radius: 8px; outline: none; }
-    
+
     .modal-bg { position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); display:flex; justify-content:center; align-items:center; z-index:2000; backdrop-filter: blur(10px); }
     .profile-card { background: #11141c; width: 460px; border-radius: 24px; border: 1px solid var(--border); overflow: hidden; }
     .profile-header { background: linear-gradient(180deg, #1a1e29 0%, #11141c 100%); padding: 35px 20px 25px; text-align: center; }
@@ -224,9 +224,42 @@ STYLE = """
     .position-box { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 18px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
     .position-number { font-size: 1.4rem; font-weight: 800; color: #f5c06d; }
     .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 12px; }
-    .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align:center; transition: 0.2s; }
+
+    /* Tier card with tooltip support */
+    .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align:center; transition: 0.2s; position: relative; cursor: default; }
+    .tier-card:hover { border-color: var(--accent); transform: translateY(-2px); }
     .tier-card.retired { opacity: 0.45; filter: grayscale(100%); }
     .tier-card.top-mode { border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.2); }
+
+    /* Custom tooltip shown on hover */
+    .tier-card .peak-tooltip {
+        display: none;
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 50%;
+        transform: translateX(-50%);
+        background: #1e2230;
+        border: 1px solid var(--accent);
+        color: #f0f2f5;
+        font-size: 0.75rem;
+        font-weight: 700;
+        padding: 5px 10px;
+        border-radius: 8px;
+        white-space: nowrap;
+        z-index: 10;
+        pointer-events: none;
+    }
+    .tier-card .peak-tooltip::after {
+        content: '';
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        border: 5px solid transparent;
+        border-top-color: var(--accent);
+    }
+    .tier-card:hover .peak-tooltip { display: block; }
+
     .tier-icon-img { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display:block; object-fit: contain; }
     .tier-label { color: #d8dde7; font-size: 0.85rem; font-weight: 800; }
     .tier-subtext { color: #9ba3af; font-size: 0.75rem; margin-top: 6px; }
@@ -236,12 +269,12 @@ STYLE = """
 @app.route('/')
 def home():
     maint = is_maintenance_active()
-    if maint.get('active'): 
+    if maint.get('active'):
         return f"<html><head>{STYLE}</head><body style='display:flex; justify-content:center; align-items:center; height:100vh;'><div class='container' style='text-align:center;'><h1>🛠️ {maint.get('reason')}</h1></div></body></html>"
 
     mode_q = normalize_mode(request.args.get('mode', ''))
     search_q = request.args.get('search', '').lower()
-    
+
     raw = list(db_mgr.players.find({"banned": {"$ne": True}}))
     users = {}
 
@@ -259,13 +292,13 @@ def home():
                 "reg_c": REGION_COLORS.get(reg, "#fff"),
                 "mode_tier": "N/A", "head_url": get_player_head_url(u, 32)
             }
-        
+
         users[u]["kits"].append(r)
         if n_mode == mode_q and not r.get('retired'):
             cur = users[u].get("mode_tier")
             if cur == "N/A" or get_tier_value(n_tier) > get_tier_value(cur):
                 users[u]["mode_tier"] = n_tier
-            
+
         if not r.get('retired'):
             users[u]["tiers"].append(n_tier)
 
@@ -303,7 +336,8 @@ def home():
                     "region_name": {"NA": "North America", "EU": "Europe", "AS": "Asia", "SA": "South America", "OC": "Oceania", "AF": "Africa"}.get(p['reg'], p['reg']),
                     "placement_color": 'gold' if idx == 1 else 'silver' if idx == 2 else '#cd7f32' if idx == 3 else '#9ba3af'
                 })
-                
+
+                # Build peak tier per mode — highest tier_value wins
                 peak_by_mode = {}
                 for kit_item in p.get("kits", []):
                     km = kit_item.get("_normalized_gamemode", "")
@@ -312,7 +346,7 @@ def home():
                         continue
                     if kit_item.get("retired", False):
                         continue
-                    
+
                     kv = get_tier_value(kt)
                     if km not in peak_by_mode or kv > peak_by_mode[km]["tier_value"]:
                         peak_by_mode[km] = {"gamemode": km, "tier": kt, "tier_value": kv}
@@ -320,7 +354,8 @@ def home():
                 spotlight["kits"] = []
                 for kit in peak_by_mode.values():
                     is_top = top_mode_tiers.get(kit["gamemode"], {}).get("tier_value", 0) == kit["tier_value"]
-                    kit["hover_text"] = "Peak"
+                    # tier here IS already the peak tier for that mode
+                    kit["peak_label"] = f"Peak: {kit['tier']}"
                     kit["top_mode"] = is_top
                     spotlight["kits"].append(kit)
                 break
@@ -362,10 +397,12 @@ def home():
                         <h3>TIERS</h3>
                         <div class="tier-grid">
                             {% for k in spot.kits %}
-                            <div class="tier-card{% if k.retired %} retired{% endif %}{% if k.top_mode %} top-mode{% endif %}" title="{{ k.hover_text }}">
+                            <div class="tier-card{% if k.retired %} retired{% endif %}{% if k.top_mode %} top-mode{% endif %}">
+                                {# Custom CSS tooltip shown on hover #}
+                                <div class="peak-tooltip">{{ k.peak_label }}</div>
                                 <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img">
-                                <div class="tier-label">{{ k.gamemode }} · {{ k.tier }}</div>
-                                <div class="tier-subtext">{{ k.hover_text }}</div>
+                                <div class="tier-label">{{ k.gamemode }}</div>
+                                <div class="tier-subtext">{{ k.tier }}</div>
                             </div>
                             {% endfor %}
                         </div>
