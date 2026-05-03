@@ -10,7 +10,6 @@ import datetime
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
-# Discord IDs must be integers
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
 HIGH_RESULTS_ID = int(os.getenv("HIGH_RESULTS_ID")) if os.getenv("HIGH_RESULTS_ID") else None
 
@@ -53,7 +52,6 @@ class DatabaseManager:
     def __init__(self, uri):
         self.client = MongoClient(uri) if uri else None
         self.db = self.client['magmatiers_db'] if self.client else None
-
         if self.db is not None:
             self.players = self.db['players']
             self.settings = self.db['settings']
@@ -128,10 +126,15 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 
     status = "promoted" if new_value > old_value else "demoted" if new_value < old_value else "updated"
 
+    # peak_tier only ever goes up — never replaced with a lower tier
+    existing_peak = existing.get("peak_tier") if existing else None
+    new_peak = t_up if (existing_peak is None or new_value > get_tier_value(existing_peak)) else existing_peak
+
     db_mgr.players.update_one(
         {"username": player, "gamemode": mode},
         {"$set": {
             "tier": t_up,
+            "peak_tier": new_peak,
             "region": region.upper(),
             "discord_id": discord_user.id,
             "retired": False,
@@ -140,7 +143,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         }},
         upsert=True
     )
-    # log the change
+
     log_channel = bot.get_channel(LOG_CHANNEL_ID) if LOG_CHANNEL_ID else None
     if log_channel:
         await log_channel.send(f"{player} was {status} to {t_up} in {mode} by {interaction.user.mention}")
@@ -225,13 +228,13 @@ STYLE = """
     .position-number { font-size: 1.4rem; font-weight: 800; color: #f5c06d; }
     .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 12px; }
 
-    /* Tier card with tooltip support */
-    .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align:center; transition: 0.2s; position: relative; cursor: default; }
+    /* Tier card */
+    .tier-card { background: #0f1117; border: 1px solid var(--border); border-radius: 16px; padding: 14px 10px; text-align: center; transition: 0.2s; position: relative; cursor: default; }
     .tier-card:hover { border-color: var(--accent); transform: translateY(-2px); }
     .tier-card.retired { opacity: 0.45; filter: grayscale(100%); }
     .tier-card.top-mode { border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.2); }
 
-    /* Custom tooltip shown on hover */
+    /* Peak tooltip — appears above card on hover */
     .tier-card .peak-tooltip {
         display: none;
         position: absolute;
@@ -241,8 +244,9 @@ STYLE = """
         background: #1e2230;
         border: 1px solid var(--accent);
         color: #f0f2f5;
-        font-size: 0.75rem;
-        font-weight: 700;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
         padding: 5px 10px;
         border-radius: 8px;
         white-space: nowrap;
@@ -260,7 +264,7 @@ STYLE = """
     }
     .tier-card:hover .peak-tooltip { display: block; }
 
-    .tier-icon-img { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display:block; object-fit: contain; }
+    .tier-icon-img { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display: block; object-fit: contain; }
     .tier-label { color: #d8dde7; font-size: 0.85rem; font-weight: 800; }
     .tier-subtext { color: #9ba3af; font-size: 0.75rem; margin-top: 6px; }
 </style>
@@ -270,7 +274,7 @@ STYLE = """
 def home():
     maint = is_maintenance_active()
     if maint.get('active'):
-        return f"<html><head>{STYLE}</head><body style='display:flex; justify-content:center; align-items:center; height:100vh;'><div class='container' style='text-align:center;'><h1>🛠️ {maint.get('reason')}</h1></div></body></html>"
+        return f"<html><head>{STYLE}</head><body style='display:flex;justify-content:center;align-items:center;height:100vh;'><div class='container' style='text-align:center;'><h1>🛠️ {maint.get('reason')}</h1></div></body></html>"
 
     mode_q = normalize_mode(request.args.get('mode', ''))
     search_q = request.args.get('search', '').lower()
@@ -294,6 +298,7 @@ def home():
             }
 
         users[u]["kits"].append(r)
+
         if n_mode == mode_q and not r.get('retired'):
             cur = users[u].get("mode_tier")
             if cur == "N/A" or get_tier_value(n_tier) > get_tier_value(cur):
@@ -315,6 +320,7 @@ def home():
 
     processed = []
     spotlight = None
+
     for u, data in users.items():
         data["rank"], data["rank_c"] = get_rank_info(data["tiers"])
         data["score"] = sum(get_tier_value(t) for t in data["tiers"])
@@ -322,7 +328,11 @@ def home():
         if mode_q and data["mode_tier"] == "N/A": continue
         processed.append(data)
 
-    players = sorted(processed, key=lambda x: (get_tier_value(x['mode_tier']), x['score']) if mode_q else x['score'], reverse=True)
+    players = sorted(
+        processed,
+        key=lambda x: (get_tier_value(x['mode_tier']), x['score']) if mode_q else x['score'],
+        reverse=True
+    )
     high_p = [p for p in players if p['rank'] in ["Grandmaster", "Legend", "Master"]]
 
     if search_q:
@@ -333,11 +343,15 @@ def home():
                     "head_url": get_player_head_url(p['u'], 80),
                     "position": idx,
                     "position_label": mode_q.upper() if mode_q else "OVERALL",
-                    "region_name": {"NA": "North America", "EU": "Europe", "AS": "Asia", "SA": "South America", "OC": "Oceania", "AF": "Africa"}.get(p['reg'], p['reg']),
+                    "region_name": {
+                        "NA": "North America", "EU": "Europe", "AS": "Asia",
+                        "SA": "South America", "OC": "Oceania", "AF": "Africa"
+                    }.get(p['reg'], p['reg']),
                     "placement_color": 'gold' if idx == 1 else 'silver' if idx == 2 else '#cd7f32' if idx == 3 else '#9ba3af'
                 })
 
-                # Build peak tier per mode — highest tier_value wins
+                # One entry per mode. peak_tier is persisted by /rank and never goes down.
+                # Falls back to current tier for players ranked before this field existed.
                 peak_by_mode = {}
                 for kit_item in p.get("kits", []):
                     km = kit_item.get("_normalized_gamemode", "")
@@ -346,16 +360,20 @@ def home():
                         continue
                     if kit_item.get("retired", False):
                         continue
-
+                    stored_peak = normalize_tier(kit_item.get("peak_tier") or kt)
                     kv = get_tier_value(kt)
                     if km not in peak_by_mode or kv > peak_by_mode[km]["tier_value"]:
-                        peak_by_mode[km] = {"gamemode": km, "tier": kt, "tier_value": kv}
+                        peak_by_mode[km] = {
+                            "gamemode": km,
+                            "tier": kt,
+                            "tier_value": kv,
+                            "peak_tier": stored_peak,
+                        }
 
                 spotlight["kits"] = []
                 for kit in peak_by_mode.values():
                     is_top = top_mode_tiers.get(kit["gamemode"], {}).get("tier_value", 0) == kit["tier_value"]
-                    # tier here IS already the peak tier for that mode
-                    kit["peak_label"] = f"Peak: {kit['tier']}"
+                    kit["peak_label"] = f"PEAK {kit['peak_tier']}"
                     kit["top_mode"] = is_top
                     spotlight["kits"].append(kit)
                 break
@@ -364,7 +382,7 @@ def home():
     <html><head><meta http-equiv="refresh" content="30"><title>MagmaTIERS</title>{{ s|safe }}</head>
     <body>
         <div class="header">
-            <a href="/" style="color:white; text-decoration:none; font-weight:800; font-size:1.6rem;">Magma<span style="color:var(--accent);">TIERS</span></a>
+            <a href="/" style="color:white;text-decoration:none;font-weight:800;font-size:1.6rem;">Magma<span style="color:var(--accent);">TIERS</span></a>
             <div class="nav-links">
                 <a href="/" class="{% if not m %}active{% endif %}">Global</a>
                 {% for gm in modes %}<a href="/?mode={{gm}}" class="{% if m == gm %}active{% endif %}">{{gm}}</a>{% endfor %}
@@ -376,7 +394,7 @@ def home():
         <div class="modal-bg" onclick="window.location.href='/?mode={{m}}'">
             <div class="profile-card" onclick="event.stopPropagation()">
                 <div class="profile-header">
-                    <div class="profile-avatar-wrapper" style="border-color: {{ spot.placement_color }};">
+                    <div class="profile-avatar-wrapper" style="border-color:{{ spot.placement_color }};">
                         <img src="{{ spot.head_url }}" class="profile-avatar">
                     </div>
                     <h2 class="profile-name">{{ spot.u }}</h2>
@@ -388,7 +406,7 @@ def home():
                     <div class="profile-section">
                         <h3>POSITION</h3>
                         <div class="position-box">
-                            <div class="position-number" style="color: {{ spot.placement_color }};">#{{ spot.position }}</div>
+                            <div class="position-number" style="color:{{ spot.placement_color }};">#{{ spot.position }}</div>
                             <div style="font-weight:800;">{{ spot.position_label }} · {{ spot.best }}</div>
                             <div style="color:#9ba3af;">({{ spot.score }} pts)</div>
                         </div>
@@ -398,7 +416,6 @@ def home():
                         <div class="tier-grid">
                             {% for k in spot.kits %}
                             <div class="tier-card{% if k.retired %} retired{% endif %}{% if k.top_mode %} top-mode{% endif %}">
-                                {# Custom CSS tooltip shown on hover #}
                                 <div class="peak-tooltip">{{ k.peak_label }}</div>
                                 <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img">
                                 <div class="tier-label">{{ k.gamemode }}</div>
@@ -415,14 +432,14 @@ def home():
         <div class="container">
             {% if not m and not search and high_p %}
             <div class="high-results">
-                <div style="font-weight:800; color:var(--accent); margin-bottom:10px;">FEATURED ELITES</div>
+                <div style="font-weight:800;color:var(--accent);margin-bottom:10px;">FEATURED ELITES</div>
                 {% for h in high_p[:3] %}
-                <a href="/?search={{h.u}}" class="player-row" style="border-color: gold;">
-                    <div style="color:gold; font-weight:800;">TOP</div>
+                <a href="/?search={{h.u}}" class="player-row" style="border-color:gold;">
+                    <div style="color:gold;font-weight:800;">TOP</div>
                     <img src="{{ h.head_url }}">
                     <div>{{h.u}} <span class="badge" style="color:{{ h.rank_c }}">{{ h.rank }}</span></div>
                     <div style="color:{{h.reg_c}}">{{h.reg}}</div>
-                    <div style="text-align:right; color:var(--accent); font-weight:800;">{{h.best}}</div>
+                    <div style="text-align:right;color:var(--accent);font-weight:800;">{{h.best}}</div>
                 </a>
                 {% endfor %}
             </div>
@@ -431,17 +448,21 @@ def home():
             {% for p in players %}
             {% set pc = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
             <a href="/?search={{ p.u }}&mode={{m}}" class="player-row{% if m and loop.index == 1 %} top-player{% endif %}">
-                <div style="font-weight:800; color:{{ pc }};">#{{ loop.index }}</div>
+                <div style="font-weight:800;color:{{ pc }};">#{{ loop.index }}</div>
                 <img src="{{ p.head_url }}">
-                <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }}; margin-left:10px;">{{ p.rank }}</span></div>
+                <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }};margin-left:10px;">{{ p.rank }}</span></div>
                 <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
-                <div style="text-align:right; color:var(--accent); font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
+                <div style="text-align:right;color:var(--accent);font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
             </a>
             {% endfor %}
         </div>
     </body></html>
     """
-    return render_template_string(template, s=STYLE, players=players, spot=spotlight, modes=MODES, m=mode_q, search=search_q, high_p=high_p, mode_icon_urls=GAMEMODE_ICON_URLS, default_icon_url=DEFAULT_GAMEMODE_ICON_URL)
+    return render_template_string(
+        template, s=STYLE, players=players, spot=spotlight, modes=MODES,
+        m=mode_q, search=search_q, high_p=high_p,
+        mode_icon_urls=GAMEMODE_ICON_URLS, default_icon_url=DEFAULT_GAMEMODE_ICON_URL
+    )
 
 @app.route('/moderation')
 def moderation():
@@ -450,16 +471,16 @@ def moderation():
         <html><head>{{ s|safe }}</head><body><div class="container">
         <h1>Reports Queue</h1>
         {% for r in reps %}
-        <div style="background:var(--card); padding:20px; border-radius:12px; margin-bottom:10px; border:1px solid var(--border);">
+        <div style="background:var(--card);padding:20px;border-radius:12px;margin-bottom:10px;border:1px solid var(--border);">
             <h3>{{ r.player }}</h3><p>{{ r.reason }}</p>
             <form action="/moderation/resolve" method="POST">
                 <input type="hidden" name="id" value="{{ r._id }}">
-                <button name="a" value="approve" style="background:green; color:white; border:none; padding:10px; border-radius:5px; cursor:pointer;">Approve</button>
-                <button name="a" value="decline" style="background:#444; color:white; border:none; padding:10px; border-radius:5px; cursor:pointer;">Decline</button>
+                <button name="a" value="approve" style="background:green;color:white;border:none;padding:10px;border-radius:5px;cursor:pointer;">Approve</button>
+                <button name="a" value="decline" style="background:#444;color:white;border:none;padding:10px;border-radius:5px;cursor:pointer;">Decline</button>
             </form>
         </div>
         {% endfor %}
-        <a href="/" style="color:var(--accent); text-decoration:none;">← Back Home</a>
+        <a href="/" style="color:var(--accent);text-decoration:none;">← Back Home</a>
         </div></body></html>
     """, s=STYLE, reps=reps)
 
@@ -470,6 +491,5 @@ def resolve():
     return redirect(url_for('moderation'))
 
 if __name__ == "__main__":
-    # Flask runs in a thread to allow Discord bot to run concurrently
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False), daemon=True).start()
     bot.run(TOKEN)
