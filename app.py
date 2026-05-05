@@ -29,7 +29,7 @@ RANK_COLORS = {
 GAMEMODE_ICON_URLS = {
     "Crystal": "https://imgur.com/g9GZWN4.png",
     "UHC": "https://imgur.com/Bhr49wo.png",
-    "Pot": "",
+    "Pot": "https://imgur.com/HSR3a7Z.png",
     "SMP": "https://imgur.com/tu6NG54.png",
     "Axe": "https://imgur.com/a/BLl7vXs.png",
     "Sword": "https://imgur.com/Wf9dcUa.png",
