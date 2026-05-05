@@ -27,13 +27,13 @@ RANK_COLORS = {
 }
 
 GAMEMODE_ICON_URLS = {
-    "Crystal": "https://imgur.com/a/QkRb78X",
-    "UHC": "https://imgur.com/Bhr49wo",
-    "Pot": "https://githubusercontent.com/PROGATIY00/birdtiers/main/pot.png",
-    "SMP": "https://imgur.com/tu6NG54",
-    "Axe": "https://imgur.com/a/BLl7vXs",
-    "Sword": "https://imgur.com/Wf9dcUa",
-    "Mace": "https://imgur.com/W4qul51",
+    "Crystal": "https://imgur.com/a/QkRb78X.png",
+    "UHC": "https://imgur.com/Bhr49wo.png",
+    "Pot": "",
+    "SMP": "https://imgur.com/tu6NG54.png",
+    "Axe": "https://imgur.com/a/BLl7vXs.png",
+    "Sword": "https://imgur.com/Wf9dcUa.png",
+    "Mace": "https://imgur.com/W4qul51.png",
     "Cart": "https://img.icons8.com/ios-filled/64/ffffff/minecart.png",
     "1.8": "https://img.icons8.com/ios-filled/64/ffffff/shield.png",
     "Trident": "https://img.icons8.com/ios-filled/64/ffffff/trident.png",
