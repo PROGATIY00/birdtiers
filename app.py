@@ -27,13 +27,13 @@ RANK_COLORS = {
 }
 
 GAMEMODE_ICON_URLS = {
-    "Crystal": "https://github.com/PROGATIY00/birdtiers/blob/main/638965736295609752.png?raw=true",
-    "UHC": "https://github.com/PROGATIY00/birdtiers/blob/main/uhc-removebg-preview.png?raw=true",
-    "Pot": "https://github.com/PROGATIY00/birdtiers/blob/main/pot.png?raw=true",
-    "SMP": "https://github.com/PROGATIY00/birdtiers/blob/main/smp-removebg-preview.png?raw=true",
-    "Axe": "https://github.com/PROGATIY00/birdtiers/blob/main/axe-removebg-preview.png?raw=true",
-    "Sword": "https://github.com/PROGATIY00/birdtiers/blob/main/images-removebg-preview.png?raw=true",
-    "Mace": "https://github.com/PROGATIY00/birdtiers/blob/main/mace.png?raw=true",
+    "Crystal": "https://raw.githubusercontent.com/PROGATIY00/birdtiers/main/638965736295609752.png",
+    "UHC": "https://raw.githubusercontent.com/PROGATIY00/birdtiers/main/uhc-removebg-preview.png",
+    "Pot": "https://raw.githubusercontent.com/PROGATIY00/birdtiers/main/pot.png",
+    "SMP": "https://raw.githubusercontent.com/PROGATIY00/birdtiers/main/smp-removebg-preview.png",
+    "Axe": "https://raw.githubusercontent.com/PROGATIY00/birdtiers/main/axe-removebg-preview.png",
+    "Sword": "https://raw.githubusercontent.com/PROGATIY00/birdtiers/main/images-removebg-preview.png",
+    "Mace": "https://raw.githubusercontent.com/PROGATIY00/birdtiers/main/mace.png",
     "Cart": "https://img.icons8.com/ios-filled/64/ffffff/minecart.png",
     "1.8": "https://img.icons8.com/ios-filled/64/ffffff/shield.png",
     "Trident": "https://img.icons8.com/ios-filled/64/ffffff/trident.png",
@@ -419,7 +419,7 @@ def home():
                             {% for k in spot.kits %}
                             <div class="tier-card{% if k.retired %} retired{% endif %}{% if k.top_mode %} top-mode{% endif %}">
                                 <div class="peak-tooltip">{{ k.peak_label }}</div>
-                                <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img">
+                                <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img" onerror="this.onerror=null;this.src='{{ default_icon_url }}';">
                                 <div class="tier-label">{{ k.gamemode }}</div>
                                 <div class="tier-subtext">{{ k.tier }}</div>
                             </div>
