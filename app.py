@@ -235,7 +235,10 @@ STYLE = """
     .tier-card:hover { border-color: var(--accent); transform: translateY(-2px); }
     .tier-card.retired { opacity: 0.45; filter: grayscale(100%); }
     .tier-card.top-mode { border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.2); }
-
+    .discord {
+    background: #7289da;
+    color: white;
+    }
     /* Peak tooltip — appears above card on hover */
     .tier-card .peak-tooltip {
         display: none;
@@ -389,7 +392,7 @@ def home():
                 <a href="/" class="{% if not m %}active{% endif %}">Global</a>
                 {% for gm in modes %}<a href="/?mode={{gm}}" class="{% if m == gm %}active{% endif %}">{{gm}}</a>{% endfor %}
             </div>
-            <button onclick='window.location.href="https://magmatiers.onrender.com/discord"'>DISCORD</button>
+            <button class="discord" onclick='window.location.href="https://magmatiers.onrender.com/discord"'>DISCORD</button>
             <form action="/" style="margin:0;"><input name="search" placeholder="Search..."></form>
         </div>
 
