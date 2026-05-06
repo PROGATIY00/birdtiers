@@ -31,7 +31,7 @@ GAMEMODE_ICON_URLS = {
     "UHC": "https://imgur.com/Bhr49wo.png",
     "Pot": "https://imgur.com/HSR3a7Z.png",
     "SMP": "https://imgur.com/tu6NG54.png",
-    "Axe": "https://imgur.com/BLl7vXs.png",
+    "Axe": "https://imgur.com/tj9EPtk.png",
     "Sword": "https://imgur.com/Wf9dcUa.png",
     "Mace": "https://imgur.com/W4qul51.png",
     "Cart": "https://img.icons8.com/ios-filled/64/ffffff/minecart.png",
