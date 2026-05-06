@@ -239,8 +239,9 @@ STYLE = """
     background: #7289da;
     color: white;
     border: none;
+    
     padding: 8px 15px;
-    border-radius: 8px;
+    border-radius: 20px;
     font-weight: 600;
     cursor: pointer;
     }
