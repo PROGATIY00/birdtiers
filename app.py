@@ -238,6 +238,11 @@ STYLE = """
     .discord {
     background: #7289da;
     color: white;
+    border: none;
+    padding: 8px 15px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
     }
     /* Peak tooltip — appears above card on hover */
     .tier-card .peak-tooltip {
