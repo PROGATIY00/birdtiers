@@ -389,6 +389,7 @@ def home():
                 <a href="/" class="{% if not m %}active{% endif %}">Global</a>
                 {% for gm in modes %}<a href="/?mode={{gm}}" class="{% if m == gm %}active{% endif %}">{{gm}}</a>{% endfor %}
             </div>
+            <button onclick='window.location.href="https://magmatiers.onrender.com/discord"'>DISCORD</button>
             <form action="/" style="margin:0;"><input name="search" placeholder="Search..."></form>
         </div>
 
