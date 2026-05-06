@@ -31,7 +31,7 @@ GAMEMODE_ICON_URLS = {
     "UHC": "https://imgur.com/Bhr49wo.png",
     "Pot": "https://imgur.com/HSR3a7Z.png",
     "SMP": "https://imgur.com/tu6NG54.png",
-    "Axe": "https://imgur.com/FZUqQ4K.png",
+    "Axe": "https://imgur.com/BLl7vXs.png",
     "Sword": "https://imgur.com/Wf9dcUa.png",
     "Mace": "https://imgur.com/W4qul51.png",
     "Cart": "https://img.icons8.com/ios-filled/64/ffffff/minecart.png",
@@ -491,7 +491,17 @@ def resolve():
     status = "Resolved" if request.form.get('a') == "approve" else "Declined"
     db_mgr.reports.update_one({"_id": ObjectId(request.form.get('id'))}, {"$set": {"status": status}})
     return redirect(url_for('moderation'))
+@app.route('/discord')
+def discord_redirect():
+    return redirect("https://dsc.gg/magmatiers")
 
+@app.route('/status')
+def status():
+    maint = is_maintenance_active()
+    return jsonify({
+        "maintenance": maint.get('active', False),
+        "reason": maint.get('reason', '') if maint.get('active') else ''
+    })
 @app.route('/api/player/<username>/<mode>')
 def get_player_tier(username, mode):
     n_mode = normalize_mode(mode)
