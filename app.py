@@ -390,7 +390,7 @@ def home():
                 break
 
     template = """
-    <html><head><meta http-equiv="refresh" content="30"><title>MagmaTIERS</title>{{ s|safe }}</head>
+<html><head><meta http-equiv="refresh" content="900"><title>MagmaTIERS</title>{{ s|safe }}</head>
     <body>
         <div class="header">
             <a href="/" style="color:white;text-decoration:none;font-weight:800;font-size:1.6rem;">Magma<span style="color:var(--accent);">TIERS</span></a>
