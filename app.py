@@ -522,5 +522,9 @@ def get_player_tier(username, mode):
     return jsonify({"username": username, "mode": n_mode, "tier": tier})
 
 if __name__ == "__main__":
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000, debug=False, use_reloader=False), daemon=True).start()
-    bot.run(TOKEN)
+    # Start Discord bot in a background thread so the Flask webserver can receive Render traffic.
+    threading.Thread(target=lambda: bot.run(TOKEN), daemon=True).start()
+
+    # Render requires the app to listen on the PORT environment variable.
+    port = int(os.getenv("PORT", "10000"))
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
