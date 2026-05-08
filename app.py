@@ -391,6 +391,18 @@ def home():
 
     template = """
 <html><head><meta http-equiv="refresh" content="900"><title>MagmaTIERS</title>{{ s|safe }}</head>
+    <script>
+      // Force-refresh Minecraft heads more often to avoid CDN caching / stale renders
+      setInterval(() => {
+        document.querySelectorAll('img').forEach(img => {
+          const src = img.getAttribute('src') || '';
+          if (!src.includes('minotar.net/helm/')) return;
+          const url = new URL(src, window.location.href);
+          url.searchParams.set('t', Date.now());
+          img.setAttribute('src', url.toString());
+        });
+      }, 900000);
+    </script>
     <body>
         <div class="header">
             <a href="/" style="color:white;text-decoration:none;font-weight:800;font-size:1.6rem;">Magma<span style="color:var(--accent);">TIERS</span></a>
