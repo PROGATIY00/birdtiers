@@ -325,7 +325,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 
     await log_action(
         "TIER UPDATE",
-        f"{player} {status} to {t_up} {mode}\nReason: {reason or 'No reason provided'}",
+        f"{player} {status} to {t_up} {mode} ({region.upper()})\n{discord_user.mention}\nReason: {reason or 'No reason provided'}",
         interaction,
         public=True,
         hide_action=True,
