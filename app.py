@@ -325,13 +325,63 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 
     await log_action(
         "TIER UPDATE",
-        f"{player} {status} to {t_up} {mode} ({region.upper()})\n{discord_user.mention}\nReason: {reason or 'No reason provided'}",
+        f"{discord_user.mention} {player} {status} to {t_up} {mode}",
         interaction,
         public=True,
         hide_action=True,
     )
 
     await interaction.response.send_message("Updated!", ephemeral=True)
+
+@bot.tree.command(name="check")
+async def check(interaction: discord.Interaction, player: str):
+    if is_bot_offline():
+        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
+
+    records = list(db_mgr.players.find({"username": player, "banned": {"$ne": True}}))
+    if not records:
+        return await interaction.response.send_message(f"Player **{player}** not found.", ephemeral=True)
+
+    tiers = []
+    regions = set()
+    peak_tier = ""
+    peak_value = 0
+    mode_tiers = {}
+
+    for r in records:
+        if r.get("retired"):
+            continue
+        t = normalize_tier(r.get("tier"))
+        tiers.append(t)
+        regions.add(r.get("region", "NA").strip().upper())
+        p = normalize_tier(r.get("peak_tier") or t)
+        pv = get_tier_value(p)
+        if pv > peak_value:
+            peak_value = pv
+            peak_tier = p
+        gm = normalize_mode(r.get("gamemode"))
+        tv = get_tier_value(t)
+        if gm not in mode_tiers or tv > mode_tiers[gm]["value"]:
+            mode_tiers[gm] = {"tier": t, "value": tv}
+
+    if not tiers:
+        return await interaction.response.send_message(f"**{player}** has no active tiers.", ephemeral=True)
+
+    rank_name, rank_color = get_rank_info(tiers)
+    region = ", ".join(sorted(regions)) if regions else "N/A"
+    best_mode = max(mode_tiers, key=lambda m: mode_tiers[m]["value"]) if mode_tiers else "N/A"
+    best_tier = mode_tiers[best_mode]["tier"] if best_mode != "N/A" else "N/A"
+
+    embed = discord.Embed(title=player, color=discord.Color(int(rank_color.replace("#", ""), 16)))
+    embed.add_field(name="Global Rank", value=rank_name, inline=True)
+    embed.add_field(name="Peak Tier", value=peak_tier or "N/A", inline=True)
+    embed.add_field(name="Region", value=region, inline=True)
+    embed.add_field(name=f"Best Tier ({best_mode})", value=best_tier, inline=True)
+
+    modes_list = "\n".join(f"{m}: {d['tier']}" for m, d in sorted(mode_tiers.items(), key=lambda x: -x[1]["value"]))
+    embed.add_field(name="All Modes", value=modes_list or "N/A", inline=False)
+
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="maintenance")
 async def maintenance(interaction: discord.Interaction, action: str, reason: str = None):
