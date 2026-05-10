@@ -100,6 +100,38 @@ def is_maintenance_active():
     status = db_mgr.settings.find_one({"_id": "maintenance_mode"})
     return status if status is not None else {"active": False}
 
+
+def _is_service_offline(service_name: str) -> bool:
+    """service_name in {web, bot, database, backups}"""
+    try:
+        s = db_mgr.settings.find_one({"_id": "offline_mode"})
+    except Exception:
+        s = None
+    if not s:
+        return False
+    return bool(s.get("services", {}).get(service_name, False))
+
+
+def is_web_offline() -> bool:
+    return _is_service_offline("web")
+
+
+def is_bot_offline() -> bool:
+    return _is_service_offline("bot")
+
+
+def is_database_offline() -> bool:
+    return _is_service_offline("database")
+
+
+def _reject_if_database_offline(write: bool = False):
+    if not is_database_offline():
+        return
+    # In database-offline mode, allow maintenance check to still work.
+    # For everything else, block reads/writes.
+    raise RuntimeError("Database is offline")
+
+
 # --- SKIN HELPERS ---
 DEFAULT_HEAD_URL = "https://minotar.net/helm/{}/{}"
 
@@ -206,8 +238,11 @@ bot = MagmaBot()
 
 @bot.tree.command(name="rank")
 async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: str, tier: str, region: str, reason: str):
+    if is_bot_offline():
+        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("No permission", ephemeral=True)
+
 
     t_up = tier.upper().strip()
     existing = db_mgr.players.find_one({"username": player, "gamemode": mode})
@@ -244,7 +279,12 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 
 @bot.tree.command(name="maintenance")
 async def maintenance(interaction: discord.Interaction, action: str, reason: str = None):
-    if not interaction.user.guild_permissions.manage_roles: return
+    if is_bot_offline():
+        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
+    if not interaction.user.guild_permissions.manage_roles:
+        return
+
+
     action_lower = action.lower()
     if action_lower == "on":
         db_mgr.settings.update_one(
@@ -374,7 +414,10 @@ STYLE = """
 
 @app.route('/')
 def home():
+    if is_web_offline():
+        return "<html><head><title>MagmaTIERS</title></head><body style='font-family:Arial;background:#0b0c10;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;'><h1>Website is offline by admin.</h1></body></html>", 503
     maint = is_maintenance_active()
+
     if maint.get('active'):
         return f"<html><head>{STYLE}</head><body style='display:flex;justify-content:center;align-items:center;height:100vh;'><div class='container' style='text-align:center;'><h1>🛠️ {maint.get('reason')}</h1></div></body></html>"
 
@@ -570,6 +613,9 @@ def home():
 
 @app.route('/moderation')
 def moderation():
+    if is_web_offline():
+        return "Website is offline by admin.", 503
+
     reps = list(db_mgr.reports.find({"status": "Pending"}))
     return render_template_string("""
         <html><head>{{ s|safe }}</head><body><div class="container">
