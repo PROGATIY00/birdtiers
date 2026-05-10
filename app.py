@@ -750,7 +750,7 @@ def home():
                 break
 
     template = """
-<html><head><meta http-equiv="refresh" content="900"><title>MagmaTIERS</title>{{ s|safe }}</head>
+<html><head><meta http-equiv="refresh" content="15"><title>MagmaTIERS</title>{{ s|safe }}</head>
     <script>
       // Force-refresh Minecraft heads more often to avoid CDN caching / stale renders
       setInterval(() => {
