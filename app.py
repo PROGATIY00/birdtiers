@@ -597,7 +597,7 @@ def resolve():
 def discord_redirect():
     return redirect("https://dsc.gg/magmatiers")
 
-@app.route('/status')
+@app.route('/old/status')
 def status():
     maint = is_maintenance_active()
 
@@ -627,8 +627,8 @@ def status():
     })
 
 
-@app.route('/status/ui')
-def status_ui():
+@app.route('/api/status')
+def status_json():
     # Simple human-friendly status page.
     maint = is_maintenance_active()
 
@@ -642,7 +642,46 @@ def status_ui():
     db_ok = bool(MONGO_URI)
     backups_ok = bool(MONGO_URI)
 
+    # maintenance revamp: show OFF/ON + estimated duration if available
+    maint_active = bool(maint.get('active', False))
+
+    maint_reason = maint.get('reason', '') if maint_active else ''
+
+    # Attempt to estimate remaining time.
+    # We expect an optional field in settings: {"_id":"maintenance_mode", "ends_at": <utc datetime iso>}
+    # If missing, we display a generic message.
+    ends_at = maint.get('ends_at')
+    est_str = '—'
+    if maint_active and ends_at:
+        try:
+            if isinstance(ends_at, datetime.datetime):
+                ends_dt = ends_at
+            else:
+                ends_dt = datetime.datetime.fromisoformat(str(ends_at).replace('Z', '+00:00'))
+            if ends_dt.tzinfo is None:
+                ends_dt = ends_dt.replace(tzinfo=datetime.timezone.utc)
+            now_dt = datetime.datetime.now(datetime.timezone.utc)
+            delta = ends_dt - now_dt
+            total_seconds = int(delta.total_seconds())
+            if total_seconds < 0:
+                est_str = 'Ended'
+            else:
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                if hours > 0:
+                    est_str = f'{hours}h {minutes}m'
+                else:
+                    est_str = f'{minutes}m'
+        except Exception:
+            est_str = 'Estimating…'
+    elif maint_active:
+        est_str = 'Unknown duration'
+
+    # show online/offline instead of maintenance-only status
+    bot_online = bool(discord_ready and TOKEN)
+
     return render_template_string(f"""
+
     <html>
       <head>
         <title>Status - MagmaTIERS</title>
