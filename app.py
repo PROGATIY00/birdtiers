@@ -6,6 +6,9 @@ from bson.objectid import ObjectId
 import os
 import threading
 import datetime
+import subprocess
+import shutil
+
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TOKEN")
@@ -105,6 +108,94 @@ def get_player_head_url(username, size=32):
     return DEFAULT_HEAD_URL.format(username, size)
 
 # --- DISCORD BOT ---
+# --- BACKUP LOOP (MongoDB) ---
+BACKUP_DIR = os.getenv("MONGO_BACKUP_DIR", os.path.join(os.getcwd(), "mongo_backups"))
+BACKUP_RETENTION_DAYS = int(os.getenv("MONGO_BACKUP_RETENTION_DAYS", "14"))
+DB_NAME = os.getenv("MONGO_DB_NAME", "magmatiers_db")
+
+
+def _ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def _cleanup_old_backups(backup_dir: str, retention_days: int) -> None:
+    if retention_days <= 0:
+        return
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=retention_days)
+    try:
+        for name in os.listdir(backup_dir):
+            full = os.path.join(backup_dir, name)
+            if not os.path.isdir(full):
+                continue
+            mtime = datetime.datetime.utcfromtimestamp(os.path.getmtime(full))
+            if mtime < cutoff:
+                shutil.rmtree(full, ignore_errors=True)
+    except FileNotFoundError:
+        return
+
+
+def _run_mongodump_once() -> None:
+    if not MONGO_URI:
+        return
+
+    _ensure_dir(BACKUP_DIR)
+
+    ts = datetime.datetime.utcnow().strftime("%Y-%m-%d_%H%M%S")
+    out_dir = os.path.join(BACKUP_DIR, f"{DB_NAME}-{ts}")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # mongodump writes into the target directory.
+    # Requires `mongodump` to be installed and available in PATH.
+    cmd = [
+        "mongodump",
+        f"--uri={MONGO_URI}",
+        f"--db={DB_NAME}",
+        f"--out={out_dir}",
+    ]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            # Don’t crash the server—just log.
+            print("[backup] mongodump failed:")
+            print(proc.stdout)
+            print(proc.stderr)
+            # If dump failed, remove directory to avoid confusion.
+            shutil.rmtree(out_dir, ignore_errors=True)
+            return
+
+        _cleanup_old_backups(BACKUP_DIR, BACKUP_RETENTION_DAYS)
+        print(f"[backup] MongoDB backup complete: {out_dir}")
+    except FileNotFoundError:
+        print("[backup] mongodump not found in PATH; skipping MongoDB backups.")
+    except Exception as e:
+        print(f"[backup] Unexpected error during backup: {e}")
+
+
+def start_mongo_backup_loop() -> None:
+    # Runs every 24 hours.
+    def loop():
+        # Stagger initial run to avoid multiple instances dumping at the same instant.
+        time_to_sleep = int(os.getenv("MONGO_BACKUP_INITIAL_DELAY_SECONDS", "0"))
+        if time_to_sleep > 0:
+            try:
+                import time
+                time.sleep(time_to_sleep)
+            except Exception:
+                pass
+
+        while True:
+            _run_mongodump_once()
+            try:
+                import time
+                time.sleep(24 * 60 * 60)
+            except Exception:
+                break
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+
+
 class MagmaBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.all())
@@ -534,6 +625,9 @@ def get_player_tier(username, mode):
     return jsonify({"username": username, "mode": n_mode, "tier": tier})
 
 if __name__ == "__main__":
+    # Start daily MongoDB backup loop.
+    start_mongo_backup_loop()
+
     # Start Discord bot in a background thread so the Flask webserver can receive Render traffic.
     threading.Thread(target=lambda: bot.run(TOKEN), daemon=True).start()
 
