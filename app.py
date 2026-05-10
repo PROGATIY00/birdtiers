@@ -719,7 +719,7 @@ def status_json():
             <h2>Services</h2>
             <div class='row'>
               <div class='k'>Website</div>
-              <div class='v'><span class='pill {'ok' if web_ok else 'bad'}'>{'OK' if web_ok else 'DOWN'}</span></div>
+              <div class='v'><span class='pill {'ok' if web_ok else 'bad'}'>{'Online' if web_ok else 'Offline'}</span></div>
             </div>
             <div class='row'>
               <div class='k'>Discord bot</div>
