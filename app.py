@@ -152,7 +152,7 @@ def _reject_if_database_offline(write: bool = False):
 
 
 # --- SKIN HELPERS ---
-DEFAULT_HEAD_URL = "https://minotar.net/helm/{}/{}"
+DEFAULT_HEAD_URL = "https://mc-heads.net/avatar/{}/{}"
 
 def get_player_head_url(username, size=32):
     username = (username or "Steve").strip()
@@ -808,12 +808,11 @@ def home():
     <script>
       // Force-refresh Minecraft heads every 15s to avoid CDN caching / stale renders
       setInterval(() => {
+        const t = Date.now();
         document.querySelectorAll('img').forEach(img => {
           const src = img.getAttribute('src') || '';
-          if (!src.includes('minotar.net/helm/')) return;
-          const url = new URL(src, window.location.href);
-          url.searchParams.set('t', Date.now());
-          img.setAttribute('src', url.toString());
+          if (!src.includes('mc-heads.net/avatar/') && !src.includes('minotar.net/')) return;
+          img.src = src.split('?')[0].split('&t=')[0] + '?t=' + t;
         });
       }, 15000);
     </script>
@@ -823,6 +822,7 @@ def home():
             <div class="nav-links">
                 <a href="/" class="{% if not m %}active{% endif %}">Global</a>
                 {% for gm in modes %}<a href="/?mode={{gm}}" class="{% if m == gm %}active{% endif %}">{{gm}}</a>{% endfor %}
+                <a href="/status">Status</a>
             </div>
             <button class="discord" aria-label="Discord" title="Discord" onclick='window.location.href="https://magmatiers.onrender.com/discord"'>
                 <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="#ffffff"><path d="M20 4.5a19.8 19.8 0 0 0-4-1.5l-.2.4a18.5 18.5 0 0 0-5.6 0l-.2-.4a19.8 19.8 0 0 0-4 1.5C2 8 1.5 11.5 1.7 15c1.2.9 2.4 1.5 3.7 2l.5-.7c-.5-.2-1-.5-1.5-.9l.4-.3c2.7 1.3 5.6 1.3 8.3 0l.4.3c-.5.4-1 .7-1.5.9l.5.7c1.3-.5 2.5-1.1 3.7-2 .2-3.5-.3-7-2.1-10.5ZM8.5 14.4c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2Zm7 0c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2Z"/></svg>
@@ -970,17 +970,16 @@ def status():
 
 @app.route('/status')
 def status_json():
-    # Simple human-friendly status page.
     maint = is_maintenance_active()
 
     discord_ready = False
     try:
-        discord_ready = bot.is_ready()
+        discord_ready = bot.is_ready() and not is_bot_offline()
     except Exception:
-        discord_ready = False
+        discord_ready = not is_bot_offline()
 
-    web_ok = True
-    db_ok = bool(MONGO_URI)
+    web_ok = not is_web_offline()
+    db_ok = bool(MONGO_URI) and not is_database_offline()
     backups_ok = bool(MONGO_URI)
 
     # maintenance revamp: show OFF/ON + estimated duration if available
