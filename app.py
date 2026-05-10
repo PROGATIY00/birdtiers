@@ -183,7 +183,7 @@ async def log_action(action: str, details: str, interaction: discord.Interaction
         print(f"[log_action] Failed to send tier log: {e}")
 
     # Public channel (LOG_CHANNEL_ID) — only when requested
-    if public and LOG_CHANNEL_ID:
+    if public and LOG_CHANNEL_ID and LOG_CHANNEL_ID != TIER_LOG_CHANNEL_ID:
         pub_channel = bot.get_channel(LOG_CHANNEL_ID)
         pub_msg = f"{prefix}{details_s}"
         try:
