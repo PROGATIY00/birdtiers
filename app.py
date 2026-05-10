@@ -758,7 +758,7 @@ def home():
     template = """
 <html><head><meta http-equiv="refresh" content="15"><title>MagmaTIERS</title>{{ s|safe }}</head>
     <script>
-      // Force-refresh Minecraft heads more often to avoid CDN caching / stale renders
+      // Force-refresh Minecraft heads every 15s to avoid CDN caching / stale renders
       setInterval(() => {
         document.querySelectorAll('img').forEach(img => {
           const src = img.getAttribute('src') || '';
@@ -767,7 +767,7 @@ def home():
           url.searchParams.set('t', Date.now());
           img.setAttribute('src', url.toString());
         });
-      }, 900000);
+      }, 15000);
     </script>
     <body>
         <div class="header">
