@@ -152,16 +152,6 @@ async def log_action(action: str, details: str, interaction: discord.Interaction
     if len(details_s) > 1700:
         details_s = details_s[:1700] + "…"
 
-    # Everyone channel (LOG_CHANNEL_ID)
-    if LOG_CHANNEL_ID:
-        channel = bot.get_channel(LOG_CHANNEL_ID)
-        msg = f"**[{action}]**\n{details_s}"
-        try:
-            if channel:
-                await channel.send(msg)
-        except Exception as e:
-            print(f"[log_action] Failed to send public log: {e}")
-
     # Tier/admin-only channel (TIER_LOG_CHANNEL_ID)
     admin_channel = bot.get_channel(TIER_LOG_CHANNEL_ID)
     admin_msg = f"**[{action}]**\n{runner}\n{details_s}" if runner else f"**[{action}]**\n{details_s}"
@@ -305,7 +295,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 
     await log_action(
         "TIER UPDATE",
-        f"Player: {player}\nMode: {mode}\nNewTier: {t_up}\nPrevTier: {old_tier}\nStatus: {status}\nReason: {reason or 'No reason provided'}",
+        f"{player} {status} to {t_up} in {mode}\nReason: {reason or 'No reason provided'}",
         interaction,
     )
 
@@ -359,6 +349,17 @@ async def ban(interaction: discord.Interaction, player: str):
     await log_action("BAN", f"Player: {player}\nResult: {'Banned' if result.modified_count > 0 else 'Not found'}", interaction)
     await interaction.response.send_message(msg, ephemeral=True)
 
+
+@bot.tree.command(name="fail")
+async def fail(interaction: discord.Interaction, player: str, tier: str, mode: str):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("No permission", ephemeral=True)
+    await log_action(
+        "FAIL",
+        f"**{player}** failed {tier.upper().strip()} in {mode}",
+        interaction,
+    )
+    await interaction.response.send_message("Logged!", ephemeral=True)
 
 @bot.tree.command(name="offline")
 async def offline_toggle(
