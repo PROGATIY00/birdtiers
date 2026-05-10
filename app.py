@@ -338,16 +338,32 @@ async def check(interaction: discord.Interaction, player: str):
     if is_bot_offline():
         return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
 
-    records = list(db_mgr.players.find({"username": player, "banned": {"$ne": True}}))
+    is_discord_id = player.isdigit()
+    if is_discord_id:
+        did = int(player)
+        records = list(db_mgr.players.find({"discord_id": did, "banned": {"$ne": True}}))
+    else:
+        records = list(db_mgr.players.find({"username": player, "banned": {"$ne": True}}))
+
     if not records:
-        return await interaction.response.send_message(f"Player **{player}** not found.", ephemeral=True)
+        return await interaction.response.send_message(f"**{player}** not found.", ephemeral=True)
+
+    # Fetch the Discord member if we have a discord_id
+    linked_discord = None
+    discord_id_val = records[0].get("discord_id")
+    if discord_id_val:
+        guild = interaction.guild
+        if guild:
+            try:
+                linked_discord = await guild.fetch_member(discord_id_val)
+            except:
+                pass
 
     tiers = []
     regions = set()
     peak_tier = ""
     peak_value = 0
     mode_tiers = {}
-    player_score = 0
 
     for r in records:
         if r.get("retired"):
@@ -384,18 +400,29 @@ async def check(interaction: discord.Interaction, player: str):
         user_scores[u] += get_tier_value(ut)
 
     sorted_players = sorted(user_scores.items(), key=lambda x: -x[1])
-    position = next((i + 1 for i, (u, _) in enumerate(sorted_players) if u.lower() == player.lower()), None)
+    usernames = list(dict.fromkeys(r["username"] for r in records))
+    main_username = usernames[0]
+    position = next((i + 1 for i, (u, _) in enumerate(sorted_players) if u.lower() == main_username.lower()), None)
 
     region = ", ".join(sorted(regions)) if regions else "N/A"
     best_mode = max(mode_tiers, key=lambda m: mode_tiers[m]["value"]) if mode_tiers else "N/A"
     best_tier = mode_tiers[best_mode]["tier"] if best_mode != "N/A" else "N/A"
 
-    embed = discord.Embed(title=player, color=discord.Color(int(rank_color.replace("#", ""), 16)))
+    title = main_username
+    if linked_discord:
+        title += f" ({linked_discord})"
+    elif is_discord_id:
+        title += " (Unknown Discord)"
+
+    embed = discord.Embed(title=title, color=discord.Color(int(rank_color.replace("#", ""), 16)))
     position_str = f"#{position}" if position else "Unranked"
     embed.add_field(name="Global Position", value=position_str, inline=True)
     embed.add_field(name="Peak Tier", value=peak_tier or "N/A", inline=True)
     embed.add_field(name="Region", value=region, inline=True)
     embed.add_field(name=f"Best Tier ({best_mode})", value=best_tier, inline=True)
+
+    if len(usernames) > 1:
+        embed.add_field(name="Usernames", value="\n".join(usernames), inline=False)
 
     modes_list = "\n".join(f"{m}: {d['tier']}" for m, d in sorted(mode_tiers.items(), key=lambda x: -x[1]["value"]))
     embed.add_field(name="All Modes", value=modes_list or "N/A", inline=False)
