@@ -16,6 +16,8 @@ TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
 TIER_LOG_CHANNEL_ID = 1502966105940164638
+RECAPTCHA_SITE_KEY = os.getenv("RECAPTCHA_SITE_KEY", "")
+RECAPTCHA_SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY", "")
 
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
@@ -902,7 +904,8 @@ def home():
     return render_template_string(
         template, s=STYLE, players=players, spot=spotlight, modes=MODES,
         m=mode_q, search=search_q, high_p=high_p,
-        mode_icon_urls=GAMEMODE_ICON_URLS, default_icon_url=DEFAULT_GAMEMODE_ICON_URL
+        mode_icon_urls=GAMEMODE_ICON_URLS, default_icon_url=DEFAULT_GAMEMODE_ICON_URL,
+        recaptcha_site=RECAPTCHA_SITE_KEY,
     )
 
 @app.route('/moderation')
@@ -1044,7 +1047,39 @@ def status_json():
           .btn {{ padding:10px 14px; background:#ff4500; color:white; border-radius:12px; font-weight:900; }}
         </style>
       </head>
-      <body>
+    <body>
+        <div id="recaptcha-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;justify-content:center;align-items:center;flex-direction:column;">
+            <div style="background:#14171f;padding:32px;border-radius:16px;text-align:center;border:1px solid #262932;">
+                <h2 style="margin:0 0 12px;">Are you human?</h2>
+                <p style="color:#9ba3af;margin-bottom:20px;">You've been here a while — please verify.</p>
+                <div class="g-recaptcha" data-sitekey="{{ recaptcha_site }}" data-callback="onRecaptcha"></div>
+                <p id="recaptcha-msg" style="color:#f87171;margin-top:12px;display:none;">Verification failed.</p>
+            </div>
+        </div>
+        <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+        <script>
+          let recaptchaTimer, redirectTimer;
+          function showRecaptcha() {
+            if (localStorage.getItem('recaptcha_done')) return;
+            document.getElementById('recaptcha-overlay').style.display = 'flex';
+            redirectTimer = setTimeout(() => { window.location.href = 'https://google.com'; }, 30000);
+          }
+          recaptchaTimer = setTimeout(showRecaptcha, 600000);
+          function onRecaptcha(token) {
+            clearTimeout(redirectTimer);
+            fetch('/verify-recaptcha', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:token})})
+              .then(r=>r.json()).then(d => {
+                if (d.success) {
+                  localStorage.setItem('recaptcha_done', '1');
+                  document.getElementById('recaptcha-overlay').style.display = 'none';
+                } else {
+                  document.getElementById('recaptcha-msg').style.display = 'block';
+                }
+              });
+          }
+          document.addEventListener('click', () => { clearTimeout(recaptchaTimer); recaptchaTimer = setTimeout(showRecaptcha, 600000); });
+          document.addEventListener('keydown', () => { clearTimeout(recaptchaTimer); recaptchaTimer = setTimeout(showRecaptcha, 600000); });
+        </script>
         <div class='wrap'>
           <div class='top'>
             <div>
@@ -1163,6 +1198,21 @@ def get_player_tier(username, mode):
         return jsonify({"error": "Player or mode not found"}), 404
     tier = player.get("tier", "N/A")
     return jsonify({"username": username, "mode": n_mode, "tier": tier})
+
+@app.route('/verify-recaptcha', methods=['POST'])
+def verify_recaptcha():
+    data = request.get_json()
+    token = data.get("token") if data else None
+    if not token or not RECAPTCHA_SECRET_KEY:
+        return jsonify({"success": False})
+    import urllib.request
+    resp = urllib.request.urlopen(
+        "https://www.google.com/recaptcha/api/siteverify",
+        data=f"secret={RECAPTCHA_SECRET_KEY}&response={token}".encode()
+    )
+    import json as _json
+    result = _json.loads(resp.read())
+    return jsonify({"success": result.get("success", False)})
 
 if __name__ == "__main__":
     # Start daily MongoDB backup loop.
