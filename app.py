@@ -727,7 +727,7 @@ def status_json():
             </div>
             <div class='row'>
               <div class='k'>Database</div>
-              <div class='v'><span class='pill {'ok' if db_ok else 'bad'}'>{'CONFIGURED' if db_ok else 'MISSING MONGO_URI'}</span></div>
+              <div class='v'><span class='pill {'ok' if db_ok else 'bad'}'>{'Online' if db_ok else 'Offline'}</span></div>
             </div>
             <div class='row'>
               <div class='k'>Backups</div>
