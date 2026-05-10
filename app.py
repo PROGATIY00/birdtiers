@@ -323,6 +323,65 @@ async def ban(interaction: discord.Interaction, player: str):
     msg = f"Banned {player}" if result.modified_count > 0 else f"Player {player} not found"
     await interaction.response.send_message(msg, ephemeral=True)
 
+
+@bot.tree.command(name="offline")
+async def offline_toggle(
+    interaction: discord.Interaction,
+    service: str,
+    state: str,
+    reason: str = None,
+):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("No permission", ephemeral=True)
+
+    service_l = (service or "").lower().strip()
+    state_l = (state or "").lower().strip()
+
+    service_map = {
+        "web": "web",
+        "site": "web",
+        "bot": "bot",
+        "discord": "bot",
+        "database": "database",
+        "db": "database",
+    }
+
+    if service_l not in service_map:
+        return await interaction.response.send_message(
+            "Invalid service. Use one of: web, bot, database",
+            ephemeral=True,
+        )
+
+    if state_l not in ["on", "off", "true", "false", "1", "0"]:
+        return await interaction.response.send_message(
+            "Invalid state. Use: on/off",
+            ephemeral=True,
+        )
+
+    turn_off = state_l in ["on", "true", "1"]
+
+    try:
+        db_mgr.settings.update_one(
+            {"_id": "offline_mode"},
+            {
+                "$set": {
+                    f"services.{service_map[service_l]}": bool(turn_off),
+                    "reason": (reason or "")[:500],
+                    "ts": datetime.datetime.utcnow(),
+                }
+            },
+            upsert=True,
+        )
+    except Exception as e:
+        return await interaction.response.send_message(f"Failed: {e}", ephemeral=True)
+
+    human_state = "OFFLINE" if turn_off else "ONLINE"
+    return await interaction.response.send_message(
+        f"Set {service_map[service_l]} to {human_state}.",
+        ephemeral=True,
+    )
+
+
 # --- WEB UI ---
 app = Flask(__name__)
 
