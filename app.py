@@ -148,6 +148,7 @@ async def log_action(action: str, details: str, interaction: discord.Interaction
     if not log_channel_id:
         return
 
+    # Log for everyone/admins: send to the configured channel and don't depend on interaction.user.
     channel = bot.get_channel(log_channel_id)
     if not channel:
         return
