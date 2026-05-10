@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord import app_commands
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify
@@ -60,12 +61,29 @@ class DatabaseManager:
             self.players = self.db['players']
             self.settings = self.db['settings']
             self.reports = self.db['reports']
+            self.console_messages = self.db['console_messages']
         else:
             self.players = DummyCollection()
             self.settings = DummyCollection()
             self.reports = DummyCollection()
+            self.console_messages = DummyCollection()
 
 db_mgr = DatabaseManager(MONGO_URI)
+
+# --- CONSOLE LOG BUFFER ---
+console_logs = []
+console_logs_lock = threading.Lock()
+
+def push_console_log(ts, action, details, runner=""):
+    with console_logs_lock:
+        console_logs.append({
+            "ts": ts,
+            "action": action,
+            "details": details,
+            "runner": runner,
+        })
+        if len(console_logs) > 200:
+            console_logs[:] = console_logs[-200:]
 
 # --- CORE LOGIC ---
 def normalize_tier(tier_name):
@@ -143,7 +161,7 @@ def get_player_head_url(username, size=32):
 # --- DISCORD BOT ---
 
 # --- ACTION LOGGING (Discord) ---
-async def log_action(action: str, details: str, interaction: discord.Interaction = None) -> None:
+async def log_action(action: str, details: str, interaction: discord.Interaction = None, public: bool = False) -> None:
     runner = ""
     if interaction is not None and getattr(interaction, "user", None) is not None:
         runner = f"{interaction.user.mention} ({interaction.user})"
@@ -160,6 +178,16 @@ async def log_action(action: str, details: str, interaction: discord.Interaction
             await admin_channel.send(admin_msg)
     except Exception as e:
         print(f"[log_action] Failed to send tier log: {e}")
+
+    # Public channel (LOG_CHANNEL_ID) — only when requested
+    if public and LOG_CHANNEL_ID:
+        pub_channel = bot.get_channel(LOG_CHANNEL_ID)
+        pub_msg = f"**[{action}]**\n{details_s}"
+        try:
+            if pub_channel:
+                await pub_channel.send(pub_msg)
+        except Exception as e:
+            print(f"[log_action] Failed to send public log: {e}")
 
 
 # --- BACKUP LOOP (MongoDB) ---
@@ -295,7 +323,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
 
     await log_action(
         "TIER UPDATE",
-        f"{player} {status} to {t_up} in {mode}\nReason: {reason or 'No reason provided'}",
+        f"{player} {status} to {t_up} {mode}\nReason: {reason or 'No reason provided'}",
         interaction,
     )
 
@@ -356,8 +384,9 @@ async def fail(interaction: discord.Interaction, player: str, tier: str, mode: s
         return await interaction.response.send_message("No permission", ephemeral=True)
     await log_action(
         "FAIL",
-        f"**{player}** failed {tier.upper().strip()} in {mode}",
+        f"**{player}** failed {tier.upper().strip()} {mode}",
         interaction,
+        public=True,
     )
     await interaction.response.send_message("Logged!", ephemeral=True)
 
