@@ -192,6 +192,12 @@ async def log_action(action: str, details: str, interaction: discord.Interaction
         except Exception as e:
             print(f"[log_action] Failed to send public log: {e}")
 
+    # Push to web console
+    push_console_log(
+        datetime.datetime.utcnow().isoformat(),
+        action, details_s, runner
+    )
+
 
 # --- BACKUP LOOP (MongoDB) ---
 BACKUP_DIR = os.getenv("MONGO_BACKUP_DIR", os.path.join(os.getcwd(), "mongo_backups"))
@@ -820,6 +826,7 @@ def home():
             <div class="nav-links">
                 <a href="/" class="{% if not m %}active{% endif %}">Global</a>
                 {% for gm in modes %}<a href="/?mode={{gm}}" class="{% if m == gm %}active{% endif %}">{{gm}}</a>{% endfor %}
+                <a href="/console">Console</a>
                 <a href="/heads">Heads</a>
                 <a href="/status">Status</a>
             </div>
@@ -1154,6 +1161,44 @@ def head_status():
       </div>
     </body></html>
     """)
+
+STYLE_CONSOLE = """
+body{margin:0;font-family:'Courier New',monospace;background:#0a0a0a;color:#00ff41;padding:16px;}
+h1{font-size:18px;margin:0 0 12px;color:#00ff41;}
+.log{font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-all;}
+.log div:hover{background:#0f0f0f;}
+.ts{color:#525768;}
+.act{color:#ff4500;font-weight:800;}
+.run{color:#888;}
+.det{color:#9ba3af;}
+.nav{margin-bottom:16px;}
+.nav a{color:#ff4500;text-decoration:none;font-weight:800;margin-right:12px;}
+"""
+
+@app.route('/console')
+def console_page():
+    if is_web_offline():
+        return "Website is offline by admin.", 503
+    with console_logs_lock:
+        logs = list(reversed(console_logs))
+    return render_template_string("""<html><head><title>Console - MagmaTIERS</title><meta name="viewport" content="width=device-width,initial-scale=1.0"><style>""" + STYLE_CONSOLE + """</style></head><body>
+<div class="nav"><a href="/">← Home</a><span style="color:#525768;font-size:13px;"> Live console — auto-refresh every 3s</span></div>
+<h1>📡 Console <span id="count" style="font-size:13px;color:#525768;">0 entries</span></h1>
+<div id="log" class="log">""" + "".join(
+    '<div><span class="ts">[{}]</span> <span class="act">{}</span>{} <span class="det">{}</span></div>'.format(
+        e["ts"][:19].replace("T", " "), e["action"], f' <span class="run">({e["runner"]})</span>' if e["runner"] else "", e["details"]
+    ) for e in logs
+) + """</div>
+<script>
+async function poll(){try{const r=await fetch('/api/console/logs');if(!r.ok)return;const d=await r.json();const el=document.getElementById('log');el.innerHTML='';d.forEach(e=>{const div=document.createElement('div');const r=e.runner?' <span class="run">('+e.runner+')</span>':'';div.innerHTML='<span class="ts">['+e.ts.slice(0,19).replace('T',' ')+']</span> <span class="act">'+e.action+'</span>'+r+' <span class="det">'+e.details+'</span>';el.appendChild(div);});document.getElementById('count').textContent=d.length+' entries';}catch(e){}}
+setInterval(poll,3000);poll();
+</script></body></html>""")
+
+@app.route('/api/console/logs')
+def console_logs_api():
+    with console_logs_lock:
+        logs = list(reversed(console_logs))
+    return jsonify(logs)
 
 @app.route('/api/player/<username>/<mode>')
 def get_player_tier(username, mode):
