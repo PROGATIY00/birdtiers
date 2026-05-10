@@ -161,7 +161,7 @@ def get_player_head_url(username, size=32):
 # --- DISCORD BOT ---
 
 # --- ACTION LOGGING (Discord) ---
-async def log_action(action: str, details: str, interaction: discord.Interaction = None, public: bool = False) -> None:
+async def log_action(action: str, details: str, interaction: discord.Interaction = None, public: bool = False, hide_action: bool = False) -> None:
     runner = ""
     if interaction is not None and getattr(interaction, "user", None) is not None:
         runner = f"{interaction.user.mention} ({interaction.user})"
@@ -170,19 +170,21 @@ async def log_action(action: str, details: str, interaction: discord.Interaction
     if len(details_s) > 1700:
         details_s = details_s[:1700] + "…"
 
+    prefix = "" if hide_action else f"**[{action}]**\n"
+
     # Tier/admin-only channel (TIER_LOG_CHANNEL_ID)
     admin_channel = bot.get_channel(TIER_LOG_CHANNEL_ID)
-    admin_msg = f"**[{action}]**\n{runner}\n{details_s}" if runner else f"**[{action}]**\n{details_s}"
+    admin_msg = f"{prefix}{runner}\n{details_s}" if runner else f"{prefix}{details_s}"
     try:
         if admin_channel:
             await admin_channel.send(admin_msg)
     except Exception as e:
         print(f"[log_action] Failed to send tier log: {e}")
 
-    # Public channel (LOG_CHANNEL_ID) — only when requested
-    if public and LOG_CHANNEL_ID:
+    # Public channel (LOG_CHANNEL_ID) — only when requested and if different channel
+    if public and LOG_CHANNEL_ID and LOG_CHANNEL_ID != TIER_LOG_CHANNEL_ID:
         pub_channel = bot.get_channel(LOG_CHANNEL_ID)
-        pub_msg = f"**[{action}]**\n{details_s}"
+        pub_msg = f"{prefix}{details_s}"
         try:
             if pub_channel:
                 await pub_channel.send(pub_msg)
@@ -325,6 +327,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         "TIER UPDATE",
         f"{player} {status} to {t_up} {mode}\nReason: {reason or 'No reason provided'}",
         interaction,
+        public=True,
     )
 
     await interaction.response.send_message("Updated!", ephemeral=True)
