@@ -627,7 +627,7 @@ def status():
     })
 
 
-@app.route('/api/status')
+@app.route('status')
 def status_json():
     # Simple human-friendly status page.
     maint = is_maintenance_active()
@@ -723,7 +723,7 @@ def status_json():
             </div>
             <div class='row'>
               <div class='k'>Discord bot</div>
-              <div class='v'><span class='pill {'ok' if discord_ready and TOKEN else 'bad'}'>{'READY' if discord_ready and TOKEN else 'NOT READY'}</span></div>
+              <div class='v'><span class='pill {'ok' if discord_ready and TOKEN else 'bad'}'>{'Online' if discord_ready and TOKEN else 'Offline'}</span></div>
             </div>
             <div class='row'>
               <div class='k'>Database</div>
