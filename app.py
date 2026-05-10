@@ -156,7 +156,8 @@ DEFAULT_HEAD_URL = "https://mc-heads.net/avatar/{}/{}"
 
 def get_player_head_url(username, size=32):
     username = (username or "Steve").strip()
-    return DEFAULT_HEAD_URL.format(username, size)
+    ts = int(datetime.datetime.utcnow().timestamp())
+    return f"https://mc-heads.net/avatar/{username}/{size}?t={ts}"
 
 # --- DISCORD BOT ---
 
@@ -804,7 +805,7 @@ def home():
                 break
 
     template = """
-<html><head><meta http-equiv="refresh" content="15"><title>MagmaTIERS</title>{{ s|safe }}</head>
+<html><head><meta http-equiv="refresh" content="300"><title>MagmaTIERS</title>{{ s|safe }}</head>
     <script>
       // Force-refresh Minecraft heads every 15s
       setInterval(() => {
