@@ -155,7 +155,9 @@ async def log_action(action: str, details: str, interaction: discord.Interaction
 
     runner = ""
     if interaction is not None and getattr(interaction, "user", None) is not None:
+        # Keep the log message limited to admins in the configured channel.
         runner = f"{interaction.user.mention} ({interaction.user})"
+
 
     # Keep messages reasonably sized.
     details_s = (details or "").strip()
