@@ -14,6 +14,7 @@ import shutil
 TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
+TIER_LOG_CHANNEL_ID = 1502966105940164638
 HIGH_RESULTS_ID = int(os.getenv("HIGH_RESULTS_ID")) if os.getenv("HIGH_RESULTS_ID") else None
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
@@ -140,8 +141,37 @@ def get_player_head_url(username, size=32):
     return DEFAULT_HEAD_URL.format(username, size)
 
 # --- DISCORD BOT ---
+
+# --- ACTION LOGGING (Discord) ---
+async def log_action(action: str, details: str, interaction: discord.Interaction = None) -> None:
+    log_channel_id = LOG_CHANNEL_ID
+    if not log_channel_id:
+        return
+
+    channel = bot.get_channel(log_channel_id)
+    if not channel:
+        return
+
+    runner = ""
+    if interaction is not None and getattr(interaction, "user", None) is not None:
+        runner = f"{interaction.user.mention} ({interaction.user})"
+
+    # Keep messages reasonably sized.
+    details_s = (details or "").strip()
+    if len(details_s) > 1700:
+        details_s = details_s[:1700] + "…"
+
+    msg = f"**[{action}]**\n{runner}\n{details_s}" if runner else f"**[{action}]**\n{details_s}"
+
+    try:
+        await channel.send(msg)
+    except Exception as e:
+        print(f"[log_action] Failed to send log: {e}")
+
+
 # --- BACKUP LOOP (MongoDB) ---
 BACKUP_DIR = os.getenv("MONGO_BACKUP_DIR", os.path.join(os.getcwd(), "mongo_backups"))
+
 BACKUP_RETENTION_DAYS = int(os.getenv("MONGO_BACKUP_RETENTION_DAYS", "14"))
 DB_NAME = os.getenv("MONGO_DB_NAME", "magmatiers_db")
 
@@ -270,9 +300,14 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         upsert=True
     )
 
-    log_channel = bot.get_channel(LOG_CHANNEL_ID) if LOG_CHANNEL_ID else None
+    await log_action(
+        "TIER UPDATE",
+        f"Player: {player}\nMode: {mode}\nNewTier: {t_up}\nPrevTier: {old_tier}\nStatus: {status}\nReason: {reason or 'No reason provided'}",
+        interaction,
+    )
+
     if log_channel:
-        await log_channel.send(
+        await tier_channel.send(
             f"{discord_user.mention}\n**{player}** was {status} to **{t_up}** in {mode}\n**Reason:** {reason or 'No reason provided'}"
         )
     await interaction.response.send_message("Updated!", ephemeral=True)
