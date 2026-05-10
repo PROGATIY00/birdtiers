@@ -497,6 +497,54 @@ async def fail(interaction: discord.Interaction, player: str, tier: str, mode: s
     )
     await interaction.response.send_message("Logged!", ephemeral=True)
 
+async def _create_automod_rule(guild_id, name, keyword_filter):
+    from discord.http import Route
+    route = Route("POST", "/guilds/{guild_id}/auto-moderation/rules", guild_id=guild_id)
+    data = {
+        "name": name,
+        "event_type": 1,
+        "trigger_type": 1,
+        "trigger_metadata": {"keyword_filter": keyword_filter},
+        "actions": [{"type": 1, "metadata": {}}],
+        "enabled": True,
+    }
+    return await bot.http.request(route, json=data)
+
+async def _delete_automod_rule(guild_id, rule_id):
+    from discord.http import Route
+    route = Route("DELETE", "/guilds/{guild_id}/auto-moderation/rules/{rule_id}", guild_id=guild_id, rule_id=rule_id)
+    return await bot.http.request(route)
+
+@bot.tree.command(name="busy")
+async def busy(interaction: discord.Interaction):
+    user = interaction.user
+    guild = interaction.guild
+    key = f"busy_rule_{user.id}"
+
+    existing = db_mgr.settings.find_one({"_id": key})
+    if existing:
+        try:
+            await _delete_automod_rule(guild.id, existing["rule_id"])
+        except Exception:
+            pass
+        db_mgr.settings.delete_one({"_id": key})
+        await interaction.response.send_message("Busy mode disabled.", ephemeral=True)
+    else:
+        try:
+            result = await _create_automod_rule(
+                guild.id,
+                f"Busy - {user.display_name}",
+                [f"<@{user.id}>", f"<@!{user.id}>"],
+            )
+            db_mgr.settings.update_one(
+                {"_id": key},
+                {"$set": {"rule_id": result["id"], "user_id": user.id}},
+                upsert=True,
+            )
+            await interaction.response.send_message("Busy mode enabled. Pings to you will be blocked.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Failed to enable busy mode: {e}", ephemeral=True)
+
 @bot.tree.command(name="offline")
 async def offline_toggle(
     interaction: discord.Interaction,
