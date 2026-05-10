@@ -334,14 +334,20 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
     await interaction.response.send_message("Updated!", ephemeral=True)
 
 @bot.tree.command(name="check")
-async def check(interaction: discord.Interaction, player: str):
+async def check(interaction: discord.Interaction, player: str = None):
     if is_bot_offline():
         return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
 
-    is_discord_id = player.isdigit()
-    if is_discord_id:
-        did = int(player)
-        records = list(db_mgr.players.find({"discord_id": did, "banned": {"$ne": True}}))
+    searched_by_discord = False
+
+    if player is None:
+        records = list(db_mgr.players.find({"discord_id": interaction.user.id, "banned": {"$ne": True}}))
+        if not records:
+            return await interaction.response.send_message("No tiers found for your account.", ephemeral=True)
+        searched_by_discord = True
+    elif player.isdigit():
+        records = list(db_mgr.players.find({"discord_id": int(player), "banned": {"$ne": True}}))
+        searched_by_discord = True
     else:
         records = list(db_mgr.players.find({"username": player, "banned": {"$ne": True}}))
 
@@ -411,7 +417,7 @@ async def check(interaction: discord.Interaction, player: str):
     title = main_username
     if linked_discord:
         title += f" ({linked_discord})"
-    elif is_discord_id:
+    elif searched_by_discord:
         title += " (Unknown Discord)"
 
     embed = discord.Embed(title=title, color=discord.Color(int(rank_color.replace("#", ""), 16)))
