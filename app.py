@@ -15,7 +15,7 @@ TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
 TIER_LOG_CHANNEL_ID = 1502966105940164638
-HIGH_RESULTS_ID = int(os.getenv("HIGH_RESULTS_ID")) if os.getenv("HIGH_RESULTS_ID") else None
+
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
@@ -144,32 +144,32 @@ def get_player_head_url(username, size=32):
 
 # --- ACTION LOGGING (Discord) ---
 async def log_action(action: str, details: str, interaction: discord.Interaction = None) -> None:
-    log_channel_id = LOG_CHANNEL_ID
-    if not log_channel_id:
-        return
-
-    # Log for everyone/admins: send to the configured channel and don't depend on interaction.user.
-    channel = bot.get_channel(log_channel_id)
-    if not channel:
-        return
-
     runner = ""
     if interaction is not None and getattr(interaction, "user", None) is not None:
-        # Keep the log message limited to admins in the configured channel.
         runner = f"{interaction.user.mention} ({interaction.user})"
 
-
-    # Keep messages reasonably sized.
     details_s = (details or "").strip()
     if len(details_s) > 1700:
         details_s = details_s[:1700] + "…"
 
-    msg = f"**[{action}]**\n{runner}\n{details_s}" if runner else f"**[{action}]**\n{details_s}"
+    # Everyone channel (LOG_CHANNEL_ID)
+    if LOG_CHANNEL_ID:
+        channel = bot.get_channel(LOG_CHANNEL_ID)
+        msg = f"**[{action}]**\n{details_s}"
+        try:
+            if channel:
+                await channel.send(msg)
+        except Exception as e:
+            print(f"[log_action] Failed to send public log: {e}")
 
+    # Tier/admin-only channel (TIER_LOG_CHANNEL_ID)
+    admin_channel = bot.get_channel(TIER_LOG_CHANNEL_ID)
+    admin_msg = f"**[{action}]**\n{runner}\n{details_s}" if runner else f"**[{action}]**\n{details_s}"
     try:
-        await channel.send(msg)
+        if admin_channel:
+            await admin_channel.send(admin_msg)
     except Exception as e:
-        print(f"[log_action] Failed to send log: {e}")
+        print(f"[log_action] Failed to send tier log: {e}")
 
 
 # --- BACKUP LOOP (MongoDB) ---
@@ -309,10 +309,6 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         interaction,
     )
 
-    if log_channel:
-        await tier_channel.send(
-            f"{discord_user.mention}\n**{player}** was {status} to **{t_up}** in {mode}\n**Reason:** {reason or 'No reason provided'}"
-        )
     await interaction.response.send_message("Updated!", ephemeral=True)
 
 @bot.tree.command(name="maintenance")
@@ -349,6 +345,7 @@ async def retire(interaction: discord.Interaction, player: str):
         {"$set": {"retired": True, "ts": datetime.datetime.utcnow()}}
     )
     msg = f"Retired {player}" if result.modified_count > 0 else f"Player {player} not found"
+    await log_action("RETIRE", f"Player: {player}\nResult: {'Retired' if result.modified_count > 0 else 'Not found'}", interaction)
     await interaction.response.send_message(msg, ephemeral=True)
 
 @bot.tree.command(name="ban")
@@ -359,6 +356,7 @@ async def ban(interaction: discord.Interaction, player: str):
         {"$set": {"banned": True, "ts": datetime.datetime.utcnow()}}
     )
     msg = f"Banned {player}" if result.modified_count > 0 else f"Player {player} not found"
+    await log_action("BAN", f"Player: {player}\nResult: {'Banned' if result.modified_count > 0 else 'Not found'}", interaction)
     await interaction.response.send_message(msg, ephemeral=True)
 
 
@@ -683,6 +681,21 @@ def home():
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if high_p and not spot %}
+        <div class="container">
+            <div class="high-results">
+                <h2 style="margin:0 0 12px;font-size:1.2rem;">🏆 Top Players</h2>
+                {% for p in high_p[:5] %}
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+                    <span class="badge" style="color:{{ p.rank_c }};">{{ p.rank }}</span>
+                    <span style="font-weight:600;">{{ p.u }}</span>
+                    <span style="color:#9ba3af;margin-left:auto;">{{ p.best }} · {{ p.score }} pts</span>
+                </div>
+                {% endfor %}
             </div>
         </div>
         {% endif %}
