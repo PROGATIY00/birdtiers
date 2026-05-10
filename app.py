@@ -545,22 +545,8 @@ def home():
         {% endif %}
 
         <div class="container">
-            {% if not m and not search and high_p %}
-            <div class="high-results">
-                <div style="font-weight:800;color:var(--accent);margin-bottom:10px;">FEATURED ELITES</div>
-                {% for h in high_p[:3] %}
-                <a href="/?search={{h.u}}" class="player-row" style="border-color:gold;">
-                    <div style="color:gold;font-weight:800;">TOP</div>
-                    <img src="{{ h.head_url }}">
-                    <div>{{h.u}} <span class="badge" style="color:{{ h.rank_c }}">{{ h.rank }}</span></div>
-                    <div style="color:{{h.reg_c}}">{{h.reg}}</div>
-                    <div style="text-align:right;color:var(--accent);font-weight:800;">{{h.best}}</div>
-                </a>
-                {% endfor %}
-            </div>
-            {% endif %}
-
             {% for p in players %}
+
             {% set pc = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
             <a href="/?search={{ p.u }}&mode={{m}}" class="player-row{% if m and loop.index == 1 %} top-player{% endif %}">
                 <div style="font-weight:800;color:{{ pc }};">#{{ loop.index }}</div>
@@ -611,10 +597,31 @@ def discord_redirect():
 @app.route('/status')
 def status():
     maint = is_maintenance_active()
+    # Discord bot status (best-effort): token presence + bot connection state if available.
+    discord_ready = False
+    try:
+        discord_ready = bot.is_ready()
+    except Exception:
+        discord_ready = False
+
     return jsonify({
+        "web": {"ok": True},
         "maintenance": maint.get('active', False),
-        "reason": maint.get('reason', '') if maint.get('active') else ''
+        "maintenance_reason": maint.get('reason', '') if maint.get('active') else '',
+        "discord_bot": {
+            "token_present": bool(TOKEN),
+            "ready": discord_ready
+        },
+        "database": {
+            "configured": bool(MONGO_URI),
+            "db_name": DB_NAME
+        },
+        "backups": {
+            "enabled": bool(MONGO_URI),
+            "dir": BACKUP_DIR
+        }
     })
+
 @app.route('/api/player/<username>/<mode>')
 def get_player_tier(username, mode):
     n_mode = normalize_mode(mode)
