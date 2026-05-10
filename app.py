@@ -157,7 +157,7 @@ DEFAULT_HEAD_URL = "https://minotar.net/avatar/{}/{}.png"
 def get_player_head_url(username, size=32):
     username = (username or "Steve").strip()
     ts = int(datetime.datetime.utcnow().timestamp())
-    return f"https://minotar.net/avatar/{username}/{size}.png?t={ts}"
+    return f"https://namemc.com/head/{username}/{size}.png?t={ts}"
 
 # --- DISCORD BOT ---
 
@@ -810,7 +810,7 @@ def home():
       // Force-refresh Minecraft heads every 15s
       setInterval(() => {
         const t = Date.now();
-        document.querySelectorAll('img[src*="minotar.net"], img[src*="mc-heads.net"]').forEach(img => {
+        document.querySelectorAll('img[src*="namemc.com"], img[src*="minotar.net"], img[src*="mc-heads.net"]').forEach(img => {
           const clean = img.src.split('?')[0];
           img.src = clean + '?t=' + t;
         });
@@ -891,7 +891,7 @@ def home():
             {% set pc = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
             <a href="/?search={{ p.u }}&mode={{m}}" class="player-row{% if m and loop.index == 1 %} top-player{% endif %}">
                 <div style="font-weight:800;color:{{ pc }};">#{{ loop.index }}</div>
-                <img src="{{ p.head_url }}" onerror="this.src='https://minotar.net/avatar/Steve/32.png?t='+Date.now();">
+                <img src="{{ p.head_url }}" onerror="this.src='https://namemc.com/head/Steve/32.png?t='+Date.now();">
                 <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }};margin-left:10px;">{{ p.rank }}</span></div>
                 <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
                 <div style="text-align:right;color:var(--accent);font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
