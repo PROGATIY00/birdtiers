@@ -806,13 +806,13 @@ def home():
     template = """
 <html><head><meta http-equiv="refresh" content="15"><title>MagmaTIERS</title>{{ s|safe }}</head>
     <script>
-      // Force-refresh Minecraft heads every 15s to avoid CDN caching / stale renders
+      // Force-refresh Minecraft heads every 15s
       setInterval(() => {
         const t = Date.now();
-        document.querySelectorAll('img').forEach(img => {
-          const src = img.getAttribute('src') || '';
-          if (!src.includes('mc-heads.net/avatar/') && !src.includes('minotar.net/')) return;
-          img.src = src.split('?')[0].split('&t=')[0] + '?t=' + t;
+        document.querySelectorAll('img[src*="mc-heads.net"], img[src*="minotar.net"]').forEach(img => {
+          const clean = img.src.split('?')[0];
+          const newSrc = clean + '?t=' + t;
+          if (img.src !== newSrc) img.src = newSrc;
         });
       }, 15000);
     </script>
@@ -891,7 +891,7 @@ def home():
             {% set pc = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
             <a href="/?search={{ p.u }}&mode={{m}}" class="player-row{% if m and loop.index == 1 %} top-player{% endif %}">
                 <div style="font-weight:800;color:{{ pc }};">#{{ loop.index }}</div>
-                <img src="{{ p.head_url }}">
+                <img src="{{ p.head_url }}" onerror="this.src='https://mc-heads.net/avatar/Steve/32?t='+Date.now();">
                 <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }};margin-left:10px;">{{ p.rank }}</span></div>
                 <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
                 <div style="text-align:right;color:var(--accent);font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
