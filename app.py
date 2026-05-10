@@ -820,6 +820,7 @@ def home():
             <div class="nav-links">
                 <a href="/" class="{% if not m %}active{% endif %}">Global</a>
                 {% for gm in modes %}<a href="/?mode={{gm}}" class="{% if m == gm %}active{% endif %}">{{gm}}</a>{% endfor %}
+                <a href="/heads">Heads</a>
                 <a href="/status">Status</a>
             </div>
             <button class="discord" aria-label="Discord" title="Discord" onclick='window.location.href="https://magmatiers.onrender.com/discord"'>
@@ -1103,6 +1104,56 @@ def status_json():
     </html>
     """,)
 
+
+@app.route('/heads')
+def head_status():
+    raw = list(db_mgr.players.find({"banned": {"$ne": True}}))
+    seen = {}
+    for r in raw:
+        u = r["username"]
+        if u not in seen:
+            seen[u] = {
+                "username": u,
+                "head_url": get_player_head_url(u, 64),
+                "region": r.get("region", "NA").strip().upper(),
+                "tier": normalize_tier(r.get("tier")),
+            }
+    players = list(seen.values())[:100]
+    return render_template_string(f"""
+    <html><head>
+      <title>Heads - MagmaTIERS</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+      <style>
+        body {{ margin:0; font-family:Arial,Helvetica,sans-serif; background:#0b0c10; color:#f0f2f5; }}
+        .wrap {{ max-width:1000px; margin:0 auto; padding:16px; }}
+        h1 {{ font-size:24px; }}
+        .grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(80px,1fr)); gap:12px; }}
+        .card {{ background:#14171f; border:1px solid #262932; border-radius:12px; padding:12px; text-align:center; }}
+        .card img {{ width:64px; height:64px; border-radius:8px; image-rendering:pixelated; }}
+        .card .name {{ font-size:11px; color:#9ba3af; margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+        .nav {{ display:flex; gap:16px; align-items:center; margin-bottom:16px; }}
+        .nav a {{ color:#ff4500; text-decoration:none; font-weight:800; }}
+      </style>
+      <script>
+        setInterval(() => {{
+          document.querySelectorAll('img[src*="minotar.net"]').forEach(img => {{
+            img.src = img.src.split('?')[0] + '?t=' + Date.now();
+          }});
+        }}, 5000);
+      </script>
+    </head><body>
+      <div class="wrap">
+        <div class="nav">
+          <a href="/">← Home</a>
+          <h1>Head Status</h1>
+        </div>
+        <p style="color:#9ba3af;margin-bottom:16px;">Heads refresh every 5s. {len(players)} unique players shown.</p>
+        <div class="grid">
+          {"".join(f'<div class="card"><img src="{p["head_url"]}" onerror="this.onerror=null;this.src=this.src.split(\'?\')[0]+\'?t=\'+Date.now();"><div class="name">{p["username"]}</div><div style="font-size:10px;color:#525768;">{p["region"]} · {p["tier"]}</div></div>' for p in players)}
+        </div>
+      </div>
+    </body></html>
+    """)
 
 @app.route('/api/player/<username>/<mode>')
 def get_player_tier(username, mode):
