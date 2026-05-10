@@ -627,7 +627,7 @@ def status():
     })
 
 
-@app.route('status')
+@app.route('/status')
 def status_json():
     # Simple human-friendly status page.
     maint = is_maintenance_active()
