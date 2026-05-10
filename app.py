@@ -328,6 +328,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
         f"{player} {status} to {t_up} {mode}\nReason: {reason or 'No reason provided'}",
         interaction,
         public=True,
+        hide_action=True,
     )
 
     await interaction.response.send_message("Updated!", ephemeral=True)
@@ -390,6 +391,7 @@ async def fail(interaction: discord.Interaction, player: str, tier: str, mode: s
         f"**{player}** failed {tier.upper().strip()} {mode}",
         interaction,
         public=True,
+        hide_action=True,
     )
     await interaction.response.send_message("Logged!", ephemeral=True)
 
