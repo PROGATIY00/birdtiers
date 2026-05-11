@@ -323,6 +323,7 @@ async def rank(interaction: discord.Interaction, player: str, discord_user: disc
             "peak_tier": new_peak,
             "region": region.upper(),
             "discord_id": discord_user.id,
+            "tester": interaction.user.id,
             "retired": False,
             "banned": False,
             "ts": datetime.datetime.utcnow()
@@ -440,6 +441,34 @@ async def check(interaction: discord.Interaction, player: str = None):
     modes_list = "\n".join(f"{m}: {d['tier']}" for m, d in sorted(mode_tiers.items(), key=lambda x: -x[1]["value"]))
     embed.add_field(name="All Modes", value=modes_list or "N/A", inline=False)
 
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="control")
+async def control(interaction: discord.Interaction, player: str):
+    if is_bot_offline():
+        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
+
+    records = list(db_mgr.players.find({"username": player, "banned": {"$ne": True}}))
+    if not records:
+        return await interaction.response.send_message(f"**{player}** not found.", ephemeral=True)
+
+    lines = []
+    for r in records:
+        if r.get("retired"):
+            continue
+        gm = r.get("gamemode", "?")
+        tier = r.get("tier", "?")
+        tester_id = r.get("tester")
+        ts = r.get("ts")
+        tester_str = f"<@{tester_id}>" if tester_id else "Unknown"
+        time_str = ts.strftime("%Y-%m-%d") if isinstance(ts, datetime.datetime) else "?"
+        lines.append(f"{gm}: **{tier}** — tested by {tester_str} ({time_str})")
+
+    if not lines:
+        return await interaction.response.send_message(f"**{player}** has no active records.", ephemeral=True)
+
+    embed = discord.Embed(title=f"Control — {player}", color=0xff4500)
+    embed.description = "\n".join(lines)
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="maintenance")
