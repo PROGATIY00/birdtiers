@@ -152,7 +152,6 @@ def _reject_if_database_offline(write: bool = False):
 
 
 # --- SKIN HELPERS ---
-DEFAULT_HEAD_URL = "https://crafatar.com/avatars/{}{}?overlay"
 UUID_CACHE = {}
 SKIN_CACHE = {}
 
@@ -200,7 +199,7 @@ def get_player_head_url(username, size=32):
     uuid = resolve_uuid(username)
     ts = int(datetime.datetime.utcnow().timestamp())
     identifier = uuid or username
-    return f"https://crafatar.com/avatars/{identifier}?overlay&size={size}&t={ts}"
+    return f"https://minotar.net/helm/{identifier}/{size}?t={ts}"
 
 # --- DISCORD BOT ---
 
@@ -887,7 +886,7 @@ def home():
     <script>
       // Force-refresh Minecraft heads every 15s
       setInterval(() => {
-        document.querySelectorAll('img[src*="crafatar.com"]').forEach(img => {
+        document.querySelectorAll('img[src*="minotar.net"]').forEach(img => {
           const clean = img.src.split('?')[0];
           if (img.src !== clean + '?t=' + Date.now()) img.src = clean + '?t=' + Date.now();
         });
@@ -967,7 +966,7 @@ def home():
             {% set pc = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
             <a href="/?search={{ p.u }}&mode={{m}}" class="player-row{% if m and loop.index == 1 %} top-player{% endif %}">
                 <div style="font-weight:800;color:{{ pc }};">#{{ loop.index }}</div>
-                <img src="{{ p.head_url }}" onerror="this.src='https://crafatar.com/avatars/Steve?overlay&size=32&t='+Date.now();">
+                <img src="{{ p.head_url }}" onerror="this.src='https://minotar.net/helm/Steve/32?t='+Date.now();">
                 <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }};margin-left:10px;">{{ p.rank }}</span></div>
                 <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
                 <div style="text-align:right;color:var(--accent);font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
@@ -1213,7 +1212,7 @@ def head_status():
       </style>
       <script>
         setInterval(() => {{
-          document.querySelectorAll('img[src*="crafatar.com"]').forEach(img => {{
+          document.querySelectorAll('img[src*="minotar.net"]').forEach(img => {{
             img.src = img.src.split('?')[0] + '?t=' + Date.now();
           }});
         }}, 5000);
