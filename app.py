@@ -152,12 +152,58 @@ def _reject_if_database_offline(write: bool = False):
 
 
 # --- SKIN HELPERS ---
-DEFAULT_HEAD_URL = "https://minotar.net/avatar/{}/{}.png"
+DEFAULT_HEAD_URL = "https://crafatar.com/avatars/{}{}?overlay"
+UUID_CACHE = {}
+SKIN_CACHE = {}
+
+def resolve_uuid(username):
+    username = username.strip().lower()
+    if username in UUID_CACHE:
+        return UUID_CACHE[username]
+    player = db_mgr.players.find_one({"username": {"$regex": f"^{username}$", "$options": "i"}})
+    if player and player.get("uuid"):
+        UUID_CACHE[username] = player["uuid"]
+        return player["uuid"]
+    try:
+        import urllib.request, json
+        resp = urllib.request.urlopen(f"https://api.mojang.com/users/profiles/minecraft/{username}", timeout=5)
+        if resp.status == 200:
+            data = json.loads(resp.read())
+            uuid = data["id"]
+            UUID_CACHE[username] = uuid
+            db_mgr.players.update_many({"username": {"$regex": f"^{username}$", "$options": "i"}}, {"$set": {"uuid": uuid}})
+            return uuid
+    except:
+        pass
+    return None
+
+def get_skin_url(uuid):
+    if uuid in SKIN_CACHE:
+        return SKIN_CACHE[uuid]
+    try:
+        import urllib.request, json, base64
+        resp = urllib.request.urlopen(f"https://sessionserver.mojang.com/session/minecraft/profile/{uuid}", timeout=5)
+        if resp.status == 200:
+            data = json.loads(resp.read())
+            for prop in data.get("properties", []):
+                if prop["name"] == "textures":
+                    textures = json.loads(base64.b64decode(prop["value"]))
+                    url = textures["textures"]["SKIN"]["url"]
+                    SKIN_CACHE[uuid] = url
+                    return url
+    except:
+        pass
+    return None
 
 def get_player_head_url(username, size=32):
     username = (username or "Steve").strip()
+    uuid = resolve_uuid(username)
     ts = int(datetime.datetime.utcnow().timestamp())
-    return f"https://minotar.net/avatar/{username}/{size}.png?t={ts}"
+    if uuid:
+        skin_url = get_skin_url(uuid)
+        if skin_url:
+            return f"{skin_url}?t={ts}"
+    return f"https://crafatar.com/avatars/{uuid or username}?overlay&size={size}&t={ts}"
 
 # --- DISCORD BOT ---
 
@@ -844,8 +890,9 @@ def home():
     <script>
       // Force-refresh Minecraft heads every 15s
       setInterval(() => {
-        document.querySelectorAll('img[src*="minotar.net"]').forEach(img => {
-          img.src = img.src.split('?')[0] + '?t=' + Date.now();
+        document.querySelectorAll('img[src*="textures.minecraft.net"], img[src*="crafatar.com"], img[src*="minotar.net"]').forEach(img => {
+          const clean = img.src.split('?')[0];
+          if (img.src !== clean + '?t=' + Date.now()) img.src = clean + '?t=' + Date.now();
         });
       }, 15000);
     </script>
@@ -855,9 +902,6 @@ def home():
             <div class="nav-links">
                 <a href="/" class="{% if not m %}active{% endif %}">Global</a>
                 {% for gm in modes %}<a href="/?mode={{gm}}" class="{% if m == gm %}active{% endif %}">{{gm}}</a>{% endfor %}
-                <a href="/console">Console</a>
-                <a href="/heads">Heads</a>
-                <a href="/status">Status</a>
             </div>
             <button class="discord" aria-label="Discord" title="Discord" onclick='window.location.href="https://magmatiers.onrender.com/discord"'>
                 <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="#ffffff"><path d="M20 4.5a19.8 19.8 0 0 0-4-1.5l-.2.4a18.5 18.5 0 0 0-5.6 0l-.2-.4a19.8 19.8 0 0 0-4 1.5C2 8 1.5 11.5 1.7 15c1.2.9 2.4 1.5 3.7 2l.5-.7c-.5-.2-1-.5-1.5-.9l.4-.3c2.7 1.3 5.6 1.3 8.3 0l.4.3c-.5.4-1 .7-1.5.9l.5.7c1.3-.5 2.5-1.1 3.7-2 .2-3.5-.3-7-2.1-10.5ZM8.5 14.4c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2Zm7 0c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2Z"/></svg>
@@ -926,7 +970,7 @@ def home():
             {% set pc = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
             <a href="/?search={{ p.u }}&mode={{m}}" class="player-row{% if m and loop.index == 1 %} top-player{% endif %}">
                 <div style="font-weight:800;color:{{ pc }};">#{{ loop.index }}</div>
-                <img src="{{ p.head_url }}" onerror="this.src='https://minotar.net/avatar/Steve/32.png?t='+Date.now();">
+                <img src="{{ p.head_url }}" onerror="this.src='https://crafatar.com/avatars/Steve?overlay&size=32&t='+Date.now();">
                 <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }};margin-left:10px;">{{ p.rank }}</span></div>
                 <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
                 <div style="text-align:right;color:var(--accent);font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
@@ -1172,7 +1216,7 @@ def head_status():
       </style>
       <script>
         setInterval(() => {{
-          document.querySelectorAll('img[src*="minotar.net"]').forEach(img => {{
+          document.querySelectorAll('img[src*="crafatar.com"]').forEach(img => {{
             img.src = img.src.split('?')[0] + '?t=' + Date.now();
           }});
         }}, 5000);
