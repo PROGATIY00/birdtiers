@@ -767,6 +767,20 @@ STYLE = """
     .tier-icon-img { width: 38px; height: 38px; margin: 0 auto 8px; border-radius: 12px; display: block; object-fit: contain; }
     .tier-label { color: #d8dde7; font-size: 0.85rem; font-weight: 800; }
     .tier-subtext { color: #9ba3af; font-size: 0.75rem; margin-top: 6px; }
+
+    .hamburger { display:none; background:none; border:none; color:var(--text); font-size:1.8rem; cursor:pointer; padding:0 8px; line-height:1; }
+    .sidebar-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:999; }
+    .sidebar { position:fixed; top:0; left:-280px; width:260px; height:100%; background:#0f1117; border-right:2px solid var(--border); z-index:1000; transition:left 0.25s ease; overflow-y:auto; padding:20px 0; display:flex; flex-direction:column; }
+    .sidebar.open { left:0; }
+    .sidebar-overlay.open { display:block; }
+    .sidebar a { display:block; color:#9ba3af; text-decoration:none; font-weight:600; font-size:0.95rem; padding:12px 24px; transition:0.2s; border-left:3px solid transparent; }
+    .sidebar a:hover, .sidebar a.active { color:var(--accent); background:rgba(255,69,0,0.06); border-left-color:var(--accent); }
+    .sidebar .sidebar-logo { padding:12px 24px 20px; font-size:1.3rem; font-weight:800; color:white; border-bottom:1px solid var(--border); margin-bottom:8px; }
+    .sidebar .sidebar-logo span { color:var(--accent); }
+    @media (max-width:768px) {
+        .hamburger { display:block; }
+        .nav-links { display:none !important; }
+    }
 </style>
 """
 
@@ -893,18 +907,35 @@ def home():
       }, 15000);
     </script>
     <body>
+        <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-logo">Magma<span>TIERS</span></div>
+            <a href="/" class="{% if not m %}active{% endif %}" onclick="toggleSidebar()">Global</a>
+            {% for gm in modes %}<a href="/?mode={{gm}}" class="{% if m == gm %}active{% endif %}" onclick="toggleSidebar()">{{gm}}</a>{% endfor %}
+            <div style="margin-top:auto;padding:16px 24px;border-top:1px solid var(--border);">
+                <button class="discord" style="width:100%;padding:10px;display:flex;align-items:center;justify-content:center;gap:8px;" onclick='window.location.href="https://magmatiers.onrender.com/discord"'>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="#ffffff"><path d="M20 4.5a19.8 19.8 0 0 0-4-1.5l-.2.4a18.5 18.5 0 0 0-5.6 0l-.2-.4a19.8 19.8 0 0 0-4 1.5C2 8 1.5 11.5 1.7 15c1.2.9 2.4 1.5 3.7 2l.5-.7c-.5-.2-1-.5-1.5-.9l.4-.3c2.7 1.3 5.6 1.3 8.3 0l.4.3c-.5.4-1 .7-1.5.9l.5.7c1.3-.5 2.5-1.1 3.7-2 .2-3.5-.3-7-2.1-10.5ZM8.5 14.4c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2Zm7 0c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2Z"/></svg>
+                    Discord
+                </button>
+            </div>
+        </div>
         <div class="header">
-            <a href="/" style="color:white;text-decoration:none;font-weight:800;font-size:1.6rem;">Magma<span style="color:var(--accent);">TIERS</span></a>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <button class="hamburger" onclick="toggleSidebar()">☰</button>
+                <a href="/" style="color:white;text-decoration:none;font-weight:800;font-size:1.6rem;">Magma<span style="color:var(--accent);">TIERS</span></a>
+            </div>
             <div class="nav-links">
                 <a href="/" class="{% if not m %}active{% endif %}">Global</a>
                 {% for gm in modes %}<a href="/?mode={{gm}}" class="{% if m == gm %}active{% endif %}">{{gm}}</a>{% endfor %}
             </div>
-            <button class="discord" aria-label="Discord" title="Discord" onclick='window.location.href="https://magmatiers.onrender.com/discord"'>
-                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="#ffffff"><path d="M20 4.5a19.8 19.8 0 0 0-4-1.5l-.2.4a18.5 18.5 0 0 0-5.6 0l-.2-.4a19.8 19.8 0 0 0-4 1.5C2 8 1.5 11.5 1.7 15c1.2.9 2.4 1.5 3.7 2l.5-.7c-.5-.2-1-.5-1.5-.9l.4-.3c2.7 1.3 5.6 1.3 8.3 0l.4.3c-.5.4-1 .7-1.5.9l.5.7c1.3-.5 2.5-1.1 3.7-2 .2-3.5-.3-7-2.1-10.5ZM8.5 14.4c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2Zm7 0c-1 0-1.8-.9-1.8-2s.8-2 1.8-2 1.8.9 1.8 2-.8 2-1.8 2Z"/></svg>
-            </button>
-
             <form action="/" style="margin:0;"><input name="search" placeholder="Search..."></form>
         </div>
+        <script>
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('open');
+            document.getElementById('sidebarOverlay').classList.toggle('open');
+        }
+        </script>
 
         {% if spot %}
         <div class="modal-bg" onclick="window.location.href='/?mode={{m}}'">
