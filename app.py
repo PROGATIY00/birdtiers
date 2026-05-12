@@ -199,11 +199,8 @@ def get_player_head_url(username, size=32):
     username = (username or "Steve").strip()
     uuid = resolve_uuid(username)
     ts = int(datetime.datetime.utcnow().timestamp())
-    if uuid:
-        skin_url = get_skin_url(uuid)
-        if skin_url:
-            return f"{skin_url}?t={ts}"
-    return f"https://crafatar.com/avatars/{uuid or username}?overlay&size={size}&t={ts}"
+    identifier = uuid or username
+    return f"https://crafatar.com/avatars/{identifier}?overlay&size={size}&t={ts}"
 
 # --- DISCORD BOT ---
 
@@ -890,7 +887,7 @@ def home():
     <script>
       // Force-refresh Minecraft heads every 15s
       setInterval(() => {
-        document.querySelectorAll('img[src*="textures.minecraft.net"], img[src*="crafatar.com"], img[src*="minotar.net"]').forEach(img => {
+        document.querySelectorAll('img[src*="crafatar.com"]').forEach(img => {
           const clean = img.src.split('?')[0];
           if (img.src !== clean + '?t=' + Date.now()) img.src = clean + '?t=' + Date.now();
         });
