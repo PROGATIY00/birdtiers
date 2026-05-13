@@ -16,6 +16,8 @@ TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
 TIER_LOG_CHANNEL_ID = 1502966105940164638
+QUEUE_CHANNEL_ID = 1497963555541225472
+TESTER_NOTIF_CHANNEL_ID = 1504206348324311131
 
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
@@ -62,11 +64,15 @@ class DatabaseManager:
             self.settings = self.db['settings']
             self.reports = self.db['reports']
             self.console_messages = self.db['console_messages']
+            self.queues = self.db['queues']
+            self.tester_profiles = self.db['tester_profiles']
         else:
             self.players = DummyCollection()
             self.settings = DummyCollection()
             self.reports = DummyCollection()
             self.console_messages = DummyCollection()
+            self.queues = DummyCollection()
+            self.tester_profiles = DummyCollection()
 
 db_mgr = DatabaseManager(MONGO_URI)
 
@@ -334,7 +340,12 @@ class MagmaBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.all())
         self.tree = app_commands.CommandTree(self)
-    async def setup_hook(self): await self.tree.sync()
+    async def setup_hook(self):
+        await self.tree.sync()
+        for q in db_mgr.queues.find({"message_id": {"$ne": None}, "status": {"$in": ["waiting", "claimed"]}}):
+            status = q.get("status", "waiting")
+            claimed_by = q.get("claimed_by")
+            self.add_view(QueueView(status=status, claimed_by=claimed_by), message_id=q["message_id"])
 
 bot = MagmaBot()
 
@@ -574,6 +585,362 @@ async def fail(interaction: discord.Interaction, player: str, tier: str, mode: s
         hide_action=True,
     )
     await interaction.response.send_message("Logged!", ephemeral=True)
+
+# --- QUEUE SYSTEM ---
+def _get_tester_profiles():
+    return list(db_mgr.tester_profiles.find({"online": True}))
+
+def _build_tester_fields():
+    testers = _get_tester_profiles()
+    if not testers:
+        return []
+
+    by_mode = {}
+    for t in testers:
+        modes = t.get("gamemodes", [])
+        mention = f"<@{t['discord_id']}>"
+        region = t.get("region", "??")
+        label = f"{mention} ({region})"
+        if not modes:
+            by_mode.setdefault("All", []).append(label)
+        else:
+            for m in modes:
+                by_mode.setdefault(m, []).append(label)
+
+    fields = []
+    for mode in MODES:
+        entries = by_mode.pop(mode, None)
+        if entries:
+            fields.append((f"\U0001f7e2 {mode}", ", ".join(entries)))
+    for mode, entries in by_mode.items():
+        fields.append((f"\U0001f7e2 {mode}", ", ".join(entries)))
+    return fields
+
+
+class QueueView(discord.ui.View):
+    def __init__(self, status="waiting", claimed_by=None):
+        super().__init__(timeout=None)
+        self._status = status
+        self._claimed_by = claimed_by
+        for child in self.children:
+            if child.custom_id == "queue_claim":
+                child.disabled = (status != "waiting")
+            elif child.custom_id == "queue_done":
+                child.disabled = (status != "claimed")
+
+    def _get_gamemode_from_embed(self, embed):
+        title = embed.title or ""
+        for mode in MODES:
+            if title.startswith(f"{mode} Queue"):
+                return mode
+        return None
+
+    @discord.ui.button(label="Claim Queue", style=discord.ButtonStyle.primary, custom_id="queue_claim")
+    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        gamemode = self._get_gamemode_from_embed(interaction.message.embeds[0])
+        if not gamemode:
+            return await interaction.response.send_message("Could not determine gamemode.", ephemeral=True)
+        if not interaction.user.guild_permissions.manage_roles:
+            return await interaction.response.send_message("No permission.", ephemeral=True)
+
+        q = next(db_mgr.queues.find({"gamemode": gamemode, "status": "waiting"}).sort("ts", 1).limit(1), None)
+        if not q:
+            return await interaction.response.send_message("No waiting entries in this queue.", ephemeral=True)
+
+        db_mgr.queues.update_one({"_id": q["_id"]}, {"$set": {"status": "claimed", "claimed_by": interaction.user.id}})
+
+        remaining = db_mgr.queues.count_documents({"gamemode": gamemode, "status": "waiting"})
+        embed, _ = _build_queue_embed(gamemode)
+        if remaining > 0:
+            new_view = QueueView(status="waiting")
+            await interaction.response.edit_message(embed=embed, view=new_view)
+        else:
+            new_view = QueueView(status="claimed", claimed_by=interaction.user.id)
+            embed.color = 0x34d399
+            embed.clear_fields()
+            embed.add_field(name="Player", value=q["username"], inline=True)
+            embed.add_field(name="Gamemode", value=q["gamemode"], inline=True)
+            embed.add_field(name="Region", value=q["region"], inline=True)
+            embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
+            embed.add_field(name="Status", value="Claimed ✅", inline=True)
+            embed.set_footer(text=f"Claimed by {interaction.user}")
+            await interaction.response.edit_message(embed=embed, view=new_view)
+
+    @discord.ui.button(label="Done", style=discord.ButtonStyle.success, custom_id="queue_done")
+    async def done(self, interaction: discord.Interaction, button: discord.ui.Button):
+        gamemode = self._get_gamemode_from_embed(interaction.message.embeds[0])
+        if not gamemode:
+            return await interaction.response.send_message("Could not determine gamemode.", ephemeral=True)
+
+        q = next(db_mgr.queues.find({"gamemode": gamemode, "status": "claimed"}).sort("ts", 1).limit(1), None)
+        if not q:
+            return await interaction.response.send_message("No claimed entries in this queue.", ephemeral=True)
+        if interaction.user.id != q.get("claimed_by") and not interaction.user.guild_permissions.manage_roles:
+            return await interaction.response.send_message("Only the claiming tester can mark as done.", ephemeral=True)
+
+        db_mgr.queues.update_one({"_id": q["_id"]}, {"$set": {"status": "completed"}})
+
+        remaining = db_mgr.queues.count_documents({"gamemode": gamemode, "status": "waiting"})
+        if remaining > 0:
+            embed, _ = _build_queue_embed(gamemode)
+            new_view = QueueView(status="waiting")
+            await interaction.response.edit_message(embed=embed, view=new_view)
+        else:
+            embed = interaction.message.embeds[0]
+            embed.color = 0x6b7280
+            embed.clear_fields()
+            embed.add_field(name="Player", value=q["username"], inline=True)
+            embed.add_field(name="Gamemode", value=q["gamemode"], inline=True)
+            embed.add_field(name="Region", value=q["region"], inline=True)
+            embed.add_field(name="Tester", value=f"<@{q['claimed_by']}>", inline=True)
+            embed.add_field(name="Status", value="Completed ✅", inline=True)
+            embed.set_footer(text="")
+            new_view = QueueView(status="completed")
+            for child in new_view.children:
+                child.disabled = True
+            await interaction.response.edit_message(embed=embed, view=new_view)
+
+    @discord.ui.button(label="More Info", style=discord.ButtonStyle.secondary, custom_id="queue_info")
+    async def info(self, interaction: discord.Interaction, button: discord.ui.Button):
+        q = db_mgr.queues.find_one({"message_id": interaction.message.id, "channel_id": interaction.channel_id})
+        if not q:
+            return await interaction.response.send_message("Queue entry not found.", ephemeral=True)
+
+        player = q["username"]
+        records = list(db_mgr.players.find({"username": player, "banned": {"$ne": True}}))
+        if not records:
+            return await interaction.response.send_message(f"No tier data for **{player}**.", ephemeral=True)
+
+        tiers = []
+        regions = set()
+        peak_tier = ""
+        peak_value = 0
+        mode_tiers = {}
+        for r in records:
+            if r.get("retired"):
+                continue
+            t = normalize_tier(r.get("tier"))
+            tiers.append(t)
+            regions.add(r.get("region", "NA").strip().upper())
+            p = normalize_tier(r.get("peak_tier") or t)
+            pv = get_tier_value(p)
+            if pv > peak_value:
+                peak_value = pv
+                peak_tier = p
+            gm = normalize_mode(r.get("gamemode"))
+            tv = get_tier_value(t)
+            if gm not in mode_tiers or tv > mode_tiers[gm]["value"]:
+                mode_tiers[gm] = {"tier": t, "value": tv}
+
+        rank_name, rank_color = get_rank_info(tiers)
+        e = discord.Embed(title=f"Info — {player}", color=discord.Color(int(rank_color.replace("#", ""), 16)))
+        e.add_field(name="Rank", value=rank_name, inline=True)
+        e.add_field(name="Peak Tier", value=peak_tier or "N/A", inline=True)
+        e.add_field(name="Region", value=", ".join(sorted(regions)) or "N/A", inline=True)
+        modes_list = "\n".join(f"{m}: {d['tier']}" for m, d in sorted(mode_tiers.items(), key=lambda x: -x[1]["value"]))
+        e.add_field(name="Tiers", value=modes_list or "N/A", inline=False)
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+
+def _build_queue_embed(n_mode):
+    waiting = list(db_mgr.queues.find({"gamemode": n_mode, "status": "waiting"}).sort("ts", 1))
+    count = len(waiting)
+
+    active = list(db_mgr.queues.find({"status": "waiting"}))
+    mode_counts = {}
+    region_counts = {}
+    for q in active:
+        mode_counts[q["gamemode"]] = mode_counts.get(q["gamemode"], 0) + 1
+        region_counts[q["region"]] = region_counts.get(q["region"], 0) + 1
+    active_modes_str = ", ".join(f"{gm} ({n})" for gm, n in sorted(mode_counts.items())) or "None"
+    active_regions_str = ", ".join(f"{r} ({n})" for r, n in sorted(region_counts.items())) or "None"
+
+    embed = discord.Embed(title=f"{n_mode} Queue", color=0xff4500)
+    if waiting:
+        lines = []
+        for idx, q in enumerate(waiting, 1):
+            lines.append(f"{idx}. {q['username']} ({q['region']})")
+        embed.add_field(name=f"In Queue ({count})", value="\n".join(lines), inline=False)
+    else:
+        embed.add_field(name="In Queue", value="Empty", inline=False)
+
+    embed.add_field(name="Active Gamemodes", value=active_modes_str, inline=False)
+    embed.add_field(name="Active Regions", value=active_regions_str, inline=False)
+
+    closed_doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
+    closed_modes = closed_doc.get("modes", []) if closed_doc else []
+    if closed_modes:
+        embed.add_field(name="Closed Gamemodes", value=", ".join(closed_modes), inline=False)
+
+    for f_name, f_val in _build_tester_fields():
+        embed.add_field(name=f_name, value=f_val, inline=False)
+
+    embed.set_footer(text=f"Updated just now | {count} waiting")
+    return embed, waiting
+
+
+@bot.tree.command(name="queue")
+async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str, region: str):
+    """Queue a player for testing"""
+    if is_bot_offline():
+        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
+
+    n_mode = normalize_mode(gamemode)
+    if n_mode not in MODES:
+        return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
+    region_u = region.upper().strip()
+    if region_u not in REGION_COLORS:
+        return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_COLORS.keys())}", ephemeral=True)
+
+    if _is_gamemode_closed(n_mode):
+        return await interaction.response.send_message(f"**{n_mode}** is currently closed in the queue.", ephemeral=True)
+
+    entry = {
+        "username": player,
+        "discord_id": interaction.user.id,
+        "gamemode": n_mode,
+        "region": region_u,
+        "status": "waiting",
+        "claimed_by": None,
+        "message_id": None,
+        "channel_id": QUEUE_CHANNEL_ID,
+        "ts": datetime.datetime.utcnow(),
+    }
+    result = db_mgr.queues.insert_one(entry)
+    queue_id = result.inserted_id
+
+    embed, waiting = _build_queue_embed(n_mode)
+
+    channel = bot.get_channel(QUEUE_CHANNEL_ID)
+    if not channel:
+        return await interaction.response.send_message("Queue channel not found.", ephemeral=True)
+
+    first_cursor = db_mgr.queues.find({"gamemode": n_mode, "status": "waiting", "message_id": {"$ne": None}}).sort("ts", 1).limit(1)
+    first = next(first_cursor, None)
+    if first:
+        try:
+            msg = await channel.fetch_message(first["message_id"])
+            await msg.edit(embed=embed)
+            db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": first["message_id"]}})
+        except Exception:
+            first = None
+
+    if not first:
+        view = QueueView()
+        msg = await channel.send(embed=embed, view=view)
+        db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
+        for q in waiting:
+            db_mgr.queues.update_one({"_id": q["_id"]}, {"$set": {"message_id": msg.id}})
+
+    notif_channel = bot.get_channel(TESTER_NOTIF_CHANNEL_ID)
+    if notif_channel and QUEUE_CHANNEL_ID != TESTER_NOTIF_CHANNEL_ID:
+        online_testers = _get_tester_profiles()
+        notif_embed = discord.Embed(
+            title="New Queue Entry",
+            description=f"**{player}** queued for **{n_mode}** ({region_u})",
+            color=0xffa500,
+        )
+        notif_embed.add_field(name="Queue Position", value=f"#{len(waiting)} in line", inline=True)
+        notif_embed.add_field(name="Online Testers", value=str(len(online_testers)), inline=True)
+        notif_embed.set_footer(text="Use /queue to join")
+        await notif_channel.send(embed=notif_embed)
+
+    await interaction.response.send_message(f"Queued **{player}** for {n_mode} ({region_u}). Position: #{len(waiting)}", ephemeral=True)
+
+
+@bot.tree.command(name="online")
+async def tester_online(interaction: discord.Interaction, gamemodes: str, region: str):
+    """Mark yourself available for testing with your gamemodes and region"""
+    parsed = [normalize_mode(m.strip()) for m in gamemodes.split(",")]
+    parsed = [m for m in parsed if m in MODES]
+    if not parsed:
+        return await interaction.response.send_message(f"No valid gamemodes. Choose from: {', '.join(MODES)}", ephemeral=True)
+    region_u = region.upper().strip()
+    if region_u not in REGION_COLORS:
+        return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_COLORS.keys())}", ephemeral=True)
+
+    ign = None
+    player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id})
+    if player_doc:
+        ign = player_doc.get("username")
+
+    db_mgr.tester_profiles.update_one(
+        {"discord_id": interaction.user.id},
+        {"$set": {
+            "ign": ign or interaction.user.display_name,
+            "region": region_u,
+            "gamemodes": parsed,
+            "online": True,
+            "ts": datetime.datetime.utcnow(),
+        }},
+        upsert=True,
+    )
+
+    modes_str = ", ".join(parsed)
+    embed = discord.Embed(title="You're now online!", color=0x34d399)
+    embed.add_field(name="IGN", value=ign or "Not set", inline=True)
+    embed.add_field(name="Region", value=region_u, inline=True)
+    embed.add_field(name="Testing", value=modes_str, inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="offline")
+async def tester_offline(interaction: discord.Interaction):
+    """Mark yourself as unavailable for testing"""
+    db_mgr.tester_profiles.update_one(
+        {"discord_id": interaction.user.id},
+        {"$set": {"online": False, "ts": datetime.datetime.utcnow()}},
+    )
+    await interaction.response.send_message("You're now **offline** for testing.", ephemeral=True)
+
+
+def _is_gamemode_closed(gamemode):
+    doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
+    return gamemode in doc.get("modes", []) if doc else False
+
+
+@bot.tree.command(name="close")
+async def close_gamemode(interaction: discord.Interaction, gamemode: str):
+    """Close a gamemode from the queue (manage_roles only)"""
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    n_mode = normalize_mode(gamemode)
+    if n_mode not in MODES:
+        return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
+
+    doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
+    closed = set(doc.get("modes", [])) if doc else set()
+    if n_mode in closed:
+        return await interaction.response.send_message(f"**{n_mode}** is already closed.", ephemeral=True)
+    closed.add(n_mode)
+    db_mgr.settings.update_one(
+        {"_id": "closed_gamemodes"},
+        {"$set": {"modes": list(closed)}},
+        upsert=True,
+    )
+
+    removed = db_mgr.queues.delete_many({"gamemode": n_mode, "status": "waiting"})
+    await log_action("QUEUE CLOSE", f"Closed **{n_mode}** (removed {removed.deleted_count} waiting entries)", interaction)
+    await interaction.response.send_message(f"Closed **{n_mode}** from queue. Removed {removed.deleted_count} pending entries.", ephemeral=True)
+
+@bot.tree.command(name="open")
+async def open_gamemode(interaction: discord.Interaction, gamemode: str):
+    """Re-open a gamemode in the queue (manage_roles only)"""
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    n_mode = normalize_mode(gamemode)
+    doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
+    closed = set(doc.get("modes", [])) if doc else set()
+    if n_mode not in closed:
+        return await interaction.response.send_message(f"**{n_mode}** is not closed.", ephemeral=True)
+    closed.discard(n_mode)
+    db_mgr.settings.update_one(
+        {"_id": "closed_gamemodes"},
+        {"$set": {"modes": list(closed)}},
+        upsert=True,
+    )
+    await log_action("QUEUE OPEN", f"Re-opened **{n_mode}** in queue", interaction)
+    await interaction.response.send_message(f"Re-opened **{n_mode}** in queue.", ephemeral=True)
+
 
 async def _create_automod_rule(guild_id, name, keyword_filter):
     from discord.http import Route
