@@ -660,21 +660,6 @@ class ClaimModal(discord.ui.Modal, title="Claim Queue"):
             except Exception:
                 dm_ok = False
 
-        # Send claim notification to tester notification channel
-        notif_channel = interaction.client.get_channel(TESTER_NOTIF_CHANNEL_ID)
-        if notif_channel:
-            claim_embed = discord.Embed(title=f"Queue Claimed — {q['username']}", color=0x34d399)
-            claim_embed.add_field(name="Player", value=q["username"], inline=True)
-            claim_embed.add_field(name="Gamemode", value=gamemode, inline=True)
-            claim_embed.add_field(name="Region", value=region, inline=True)
-            claim_embed.add_field(name="Server", value=server, inline=False)
-            claim_embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
-            claim_embed.set_footer(text=f"Claimed by {interaction.user}")
-            await notif_channel.send(
-                content=f"<@{player_doc['discord_id']}>" if player_doc and player_doc.get("discord_id") else None,
-                embed=claim_embed,
-            )
-
         embed, _ = _build_queue_embed(self.gamemode_name)
         remaining = db_mgr.queues.count_documents({"gamemode": self.gamemode_name, "status": "waiting"})
 
@@ -901,19 +886,6 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
         db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
         for q in waiting:
             db_mgr.queues.update_one({"_id": q["_id"]}, {"$set": {"message_id": msg.id}})
-
-    notif_channel = bot.get_channel(TESTER_NOTIF_CHANNEL_ID)
-    if notif_channel and QUEUE_CHANNEL_ID != TESTER_NOTIF_CHANNEL_ID:
-        online_testers = _get_tester_profiles()
-        notif_embed = discord.Embed(
-            title="New Queue Entry",
-            description=f"**{player}** queued for **{n_mode}** ({region_u})",
-            color=0xffa500,
-        )
-        notif_embed.add_field(name="Queue Position", value=f"#{len(waiting)} in line", inline=True)
-        notif_embed.add_field(name="Online Testers", value=str(len(online_testers)), inline=True)
-        notif_embed.set_footer(text="Use /queue to join")
-        await notif_channel.send(embed=notif_embed)
 
     await interaction.response.send_message(f"Queued **{player}** for {n_mode} ({region_u}). Position: #{len(waiting)}", ephemeral=True)
 
