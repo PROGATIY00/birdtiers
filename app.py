@@ -617,6 +617,78 @@ def _build_tester_fields():
     return fields
 
 
+class ClaimModal(discord.ui.Modal, title="Claim Queue"):
+    def __init__(self, queue_entry, gamemode):
+        super().__init__()
+        self.queue_entry = queue_entry
+        self.gamemode_name = gamemode
+        self.server = discord.ui.TextInput(label="Recommended Server", placeholder="e.g. 0.0.0.0:25565", required=True, max_length=100)
+        self.add_item(self.server)
+        self.add_item(discord.ui.TextInput(label="Gamemode", default=gamemode, required=True, max_length=20))
+        self.add_item(discord.ui.TextInput(label="Region", default=queue_entry["region"], required=True, max_length=5))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        server = self.children[0].value
+        gamemode = self.children[1].value
+        region = self.children[2].value
+
+        q = self.queue_entry
+        db_mgr.queues.update_one({"_id": q["_id"]}, {"$set": {"status": "claimed", "claimed_by": interaction.user.id}})
+
+        # Try to DM the player
+        player_doc = db_mgr.players.find_one({"username": q["username"]})
+        dm_ok = False
+        if player_doc and player_doc.get("discord_id"):
+            try:
+                guild = interaction.guild
+                if guild:
+                    member = guild.get_member(player_doc["discord_id"])
+                    if member:
+                        dm = await member.create_dm()
+                        dm_embed = discord.Embed(
+                            title="Your queue has been claimed!",
+                            color=0x34d399,
+                        )
+                        dm_embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
+                        dm_embed.add_field(name="Gamemode", value=gamemode, inline=True)
+                        dm_embed.add_field(name="Region", value=region, inline=True)
+                        dm_embed.add_field(name="Server", value=server, inline=False)
+                        await dm.send(embed=dm_embed)
+                        dm_ok = True
+            except discord.Forbidden:
+                dm_ok = False
+            except Exception:
+                dm_ok = False
+
+        embed, _ = _build_queue_embed(self.gamemode_name)
+        remaining = db_mgr.queues.count_documents({"gamemode": self.gamemode_name, "status": "waiting"})
+
+        if remaining > 0:
+            new_view = QueueView(status="waiting")
+            await interaction.response.edit_message(embed=embed, view=new_view)
+            msg = f"Claimed **{q['username']}** for {gamemode} on {server}."
+            if not dm_ok:
+                msg += " ⚠️ Could not DM the player (DMs closed or no Discord linked)."
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            q_embed = interaction.message.embeds[0]
+            q_embed.color = 0x34d399
+            q_embed.clear_fields()
+            q_embed.add_field(name="Player", value=q["username"], inline=True)
+            q_embed.add_field(name="Gamemode", value=gamemode, inline=True)
+            q_embed.add_field(name="Region", value=region, inline=True)
+            q_embed.add_field(name="Server", value=server, inline=False)
+            q_embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
+            q_embed.add_field(name="Status", value="Claimed ✅", inline=True)
+            q_embed.set_footer(text=f"Claimed by {interaction.user}")
+            new_view = QueueView(status="claimed", claimed_by=interaction.user.id)
+            await interaction.response.edit_message(embed=q_embed, view=new_view)
+            msg = f"Claimed **{q['username']}** for {gamemode} on {server}."
+            if not dm_ok:
+                msg += " ⚠️ Could not DM the player (DMs closed or no Discord linked)."
+            await interaction.followup.send(msg, ephemeral=True)
+
+
 class QueueView(discord.ui.View):
     def __init__(self, status="waiting", claimed_by=None):
         super().__init__(timeout=None)
@@ -647,24 +719,7 @@ class QueueView(discord.ui.View):
         if not q:
             return await interaction.response.send_message("No waiting entries in this queue.", ephemeral=True)
 
-        db_mgr.queues.update_one({"_id": q["_id"]}, {"$set": {"status": "claimed", "claimed_by": interaction.user.id}})
-
-        remaining = db_mgr.queues.count_documents({"gamemode": gamemode, "status": "waiting"})
-        embed, _ = _build_queue_embed(gamemode)
-        if remaining > 0:
-            new_view = QueueView(status="waiting")
-            await interaction.response.edit_message(embed=embed, view=new_view)
-        else:
-            new_view = QueueView(status="claimed", claimed_by=interaction.user.id)
-            embed.color = 0x34d399
-            embed.clear_fields()
-            embed.add_field(name="Player", value=q["username"], inline=True)
-            embed.add_field(name="Gamemode", value=q["gamemode"], inline=True)
-            embed.add_field(name="Region", value=q["region"], inline=True)
-            embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
-            embed.add_field(name="Status", value="Claimed ✅", inline=True)
-            embed.set_footer(text=f"Claimed by {interaction.user}")
-            await interaction.response.edit_message(embed=embed, view=new_view)
+        await interaction.response.send_modal(ClaimModal(q, gamemode))
 
     @discord.ui.button(label="Done", style=discord.ButtonStyle.success, custom_id="queue_done")
     async def done(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -990,8 +1045,8 @@ async def busy(interaction: discord.Interaction):
         except Exception as e:
             await interaction.response.send_message(f"Failed to enable busy mode: {e}", ephemeral=True)
 
-@bot.tree.command(name="offline")
-async def offline_toggle(
+@bot.tree.command(name="svc")
+async def service_toggle(
     interaction: discord.Interaction,
     service: str,
     state: str,
