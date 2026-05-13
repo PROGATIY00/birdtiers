@@ -660,9 +660,9 @@ class ClaimModal(discord.ui.Modal, title="Claim Queue"):
             except Exception:
                 dm_ok = False
 
-        # Send claim notification to queue channel
-        queue_channel = interaction.client.get_channel(QUEUE_CHANNEL_ID)
-        if queue_channel:
+        # Send claim notification to tester notification channel
+        notif_channel = interaction.client.get_channel(TESTER_NOTIF_CHANNEL_ID)
+        if notif_channel:
             claim_embed = discord.Embed(title=f"Queue Claimed — {q['username']}", color=0x34d399)
             claim_embed.add_field(name="Player", value=q["username"], inline=True)
             claim_embed.add_field(name="Gamemode", value=gamemode, inline=True)
@@ -670,7 +670,7 @@ class ClaimModal(discord.ui.Modal, title="Claim Queue"):
             claim_embed.add_field(name="Server", value=server, inline=False)
             claim_embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
             claim_embed.set_footer(text=f"Claimed by {interaction.user}")
-            await queue_channel.send(
+            await notif_channel.send(
                 content=f"<@{player_doc['discord_id']}>" if player_doc and player_doc.get("discord_id") else None,
                 embed=claim_embed,
             )
