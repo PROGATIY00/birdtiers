@@ -608,14 +608,6 @@ async def fail(interaction: discord.Interaction, player: str, tier: str, mode: s
 def _get_tester_profiles():
     return list(db_mgr.tester_profiles.find({"online": True}))
 
-def _build_tester_notif_embed(n_mode, player, region_u, queued_by):
-    embed = discord.Embed(title=n_mode, color=0xff4500)
-    embed.add_field(name="Player", value=player, inline=True)
-    embed.add_field(name="Region", value=region_u, inline=True)
-    embed.add_field(name="Queued By", value=queued_by, inline=True)
-    embed.set_footer(text="1 in queue")
-    return embed
-
 def _build_entry_embed(n_mode, player, region_u, queued_by, server=None):
     embed = discord.Embed(title=n_mode, color=0xff4500)
     embed.add_field(name="Player", value=player, inline=True)
@@ -913,12 +905,6 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
         }
         queue_id = db_mgr.queues.insert_one(entry).inserted_id
 
-        # Send simple notification to queue channel
-        queue_channel = interaction.client.get_channel(QUEUE_CHANNEL_ID)
-        if queue_channel:
-            notif_embed = _build_tester_notif_embed(n_mode, ign, region, interaction.user.mention)
-            await queue_channel.send(embed=notif_embed)
-
         # Send queue entry with buttons to claim channel
         claim_channel = interaction.client.get_channel(CLAIM_CHANNEL_ID)
         if claim_channel:
@@ -966,12 +952,6 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
         "ts": datetime.datetime.utcnow(),
     }
     queue_id = db_mgr.queues.insert_one(entry).inserted_id
-
-    # Send simple notification to queue channel
-    queue_channel = bot.get_channel(QUEUE_CHANNEL_ID)
-    if queue_channel:
-        notif_embed = _build_tester_notif_embed(n_mode, player, region_u, interaction.user.mention)
-        await queue_channel.send(embed=notif_embed)
 
     # Send queue entry with buttons to claim channel
     claim_channel = bot.get_channel(CLAIM_CHANNEL_ID)
