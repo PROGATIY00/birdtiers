@@ -18,8 +18,9 @@ MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
 TIER_LOG_CHANNEL_ID = 1502966105940164638
 QUEUE_CHANNEL_ID = 1497963555541225472
-STATUS_CHANNEL_ID = 1504206348324311131
+STATUS_CHANNEL_ID = 1497989003721310249
 TESTER_NOTIF_CHANNEL_ID = 1504206348324311131
+CLAIM_CHANNEL_ID = 1504206348324311131
 
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
@@ -355,7 +356,7 @@ class MagmaBot(discord.Client):
 
 bot = MagmaBot()
 
-@tasks.loop(minutes=2)
+@tasks.loop(seconds=30)
 async def refresh_queue_status():
     try:
         await _refresh_queue_channel(bot)
@@ -615,71 +616,15 @@ def _build_tester_notif_embed(n_mode, player, region_u, queued_by):
     embed.set_footer(text="1 in queue")
     return embed
 
-
-class TierModal(discord.ui.Modal, title="Assign Tier"):
-    def __init__(self, queue_entry):
-        super().__init__()
-        self.queue_entry = queue_entry
-        self.add_item(discord.ui.TextInput(label="IGN", default=queue_entry["username"], required=True, max_length=30))
-        self.add_item(discord.ui.TextInput(label="Gamemode", default=queue_entry["gamemode"], required=True, max_length=20))
-        self.add_item(discord.ui.TextInput(label="Region", default=queue_entry["region"], required=True, max_length=5))
-        self.add_item(discord.ui.TextInput(label="Tier", placeholder="e.g. S, A, B, C, D, Unranked", required=True, max_length=20))
-
-    async def on_submit(self, interaction: discord.Interaction):
-        ign = self.children[0].value.strip()
-        gamemode = self.children[1].value.strip()
-        region = self.children[2].value.strip().upper()
-        tier = self.children[3].value.strip().upper()
-
-        t_up = normalize_tier(tier)
-        if not t_up or get_tier_value(t_up) == 0:
-            return await interaction.response.send_message(f"Invalid tier. Valid: {', '.join(TIER_ORDER)}", ephemeral=True)
-
-        n_mode = normalize_mode(gamemode)
-        if n_mode not in MODES:
-            return await interaction.response.send_message(f"Invalid gamemode.", ephemeral=True)
-        if region not in REGION_COLORS:
-            return await interaction.response.send_message(f"Invalid region.", ephemeral=True)
-
-        existing = db_mgr.players.find_one({"username": ign, "gamemode": n_mode})
-        old_tier = existing.get("tier") if existing else None
-        old_value = get_tier_value(old_tier) if old_tier else 0
-        new_value = get_tier_value(t_up)
-        status = "promoted" if new_value > old_value else "demoted" if new_value < old_value else "updated"
-        existing_peak = existing.get("peak_tier") if existing else None
-        new_peak = t_up if (existing_peak is None or new_value > get_tier_value(existing_peak)) else existing_peak
-
-        db_mgr.players.update_one(
-            {"username": ign, "gamemode": n_mode},
-            {"$set": {
-                "tier": t_up, "peak_tier": new_peak, "region": region,
-                "discord_id": self.queue_entry.get("discord_id"),
-                "tester": interaction.user.id,
-                "retired": False, "banned": False, "ts": datetime.datetime.utcnow()
-            }},
-            upsert=True,
-        )
-
-        await log_action(
-            "TIER UPDATE",
-            f"{interaction.user.mention} {ign} {status} to {t_up} {n_mode}",
-            interaction,
-            public=True,
-            hide_action=True,
-        )
-
-        notif = interaction.client.get_channel(TESTER_NOTIF_CHANNEL_ID)
-        if notif:
-            n_embed = discord.Embed(title="Tier Assigned", color=0xf59e0b)
-            n_embed.add_field(name="IGN", value=ign, inline=True)
-            n_embed.add_field(name="Gamemode", value=n_mode, inline=True)
-            n_embed.add_field(name="Region", value=region, inline=True)
-            n_embed.add_field(name="Tier", value=t_up, inline=True)
-            n_embed.add_field(name="Status", value=status, inline=True)
-            n_embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
-            await notif.send(embed=n_embed)
-
-        await interaction.response.send_message(f"**{ign}** ranked {t_up} in {n_mode} ({status}).", ephemeral=True)
+def _build_entry_embed(n_mode, player, region_u, queued_by, server=None):
+    embed = discord.Embed(title=n_mode, color=0xff4500)
+    embed.add_field(name="Player", value=player, inline=True)
+    embed.add_field(name="Region", value=region_u, inline=True)
+    embed.add_field(name="Queued By", value=queued_by, inline=True)
+    if server:
+        embed.add_field(name="Recommended Server", value=server, inline=True)
+    embed.set_footer(text="1 in queue")
+    return embed
 
 
 class ClaimModal(discord.ui.Modal, title="Claim Queue"):
@@ -963,23 +908,23 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
             "username": ign, "discord_id": interaction.user.id,
             "gamemode": n_mode, "region": region,
             "status": "waiting", "claimed_by": None,
-            "message_id": None, "channel_id": QUEUE_CHANNEL_ID,
+            "message_id": None, "channel_id": CLAIM_CHANNEL_ID,
             "ts": datetime.datetime.utcnow(),
         }
         queue_id = db_mgr.queues.insert_one(entry).inserted_id
 
-        # Send simple notification to tester channel
-        notif_channel = interaction.client.get_channel(TESTER_NOTIF_CHANNEL_ID)
-        if notif_channel:
-            notif_embed = _build_tester_notif_embed(n_mode, ign, region, interaction.user.mention)
-            await notif_channel.send(embed=notif_embed)
-
-        # Send queue entry with buttons to queue channel
+        # Send simple notification to queue channel
         queue_channel = interaction.client.get_channel(QUEUE_CHANNEL_ID)
         if queue_channel:
-            entry_embed = _build_tester_notif_embed(n_mode, ign, region, interaction.user.mention)
+            notif_embed = _build_tester_notif_embed(n_mode, ign, region, interaction.user.mention)
+            await queue_channel.send(embed=notif_embed)
+
+        # Send queue entry with buttons to claim channel
+        claim_channel = interaction.client.get_channel(CLAIM_CHANNEL_ID)
+        if claim_channel:
+            entry_embed = _build_entry_embed(n_mode, ign, region, interaction.user.mention, server=server)
             view = QueueView(status="waiting")
-            msg = await queue_channel.send(embed=entry_embed, view=view)
+            msg = await claim_channel.send(embed=entry_embed, view=view)
             db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
 
         await _refresh_queue_channel(interaction.client)
@@ -1017,23 +962,23 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
         "username": player, "discord_id": interaction.user.id,
         "gamemode": n_mode, "region": region_u,
         "status": "waiting", "claimed_by": None,
-        "message_id": None, "channel_id": QUEUE_CHANNEL_ID,
+        "message_id": None, "channel_id": CLAIM_CHANNEL_ID,
         "ts": datetime.datetime.utcnow(),
     }
     queue_id = db_mgr.queues.insert_one(entry).inserted_id
 
-    # Send simple notification to tester channel
-    notif_channel = bot.get_channel(TESTER_NOTIF_CHANNEL_ID)
-    if notif_channel:
-        notif_embed = _build_tester_notif_embed(n_mode, player, region_u, interaction.user.mention)
-        await notif_channel.send(embed=notif_embed)
-
-    # Send queue entry with buttons to queue channel
+    # Send simple notification to queue channel
     queue_channel = bot.get_channel(QUEUE_CHANNEL_ID)
     if queue_channel:
-        entry_embed = _build_tester_notif_embed(n_mode, player, region_u, interaction.user.mention)
+        notif_embed = _build_tester_notif_embed(n_mode, player, region_u, interaction.user.mention)
+        await queue_channel.send(embed=notif_embed)
+
+    # Send queue entry with buttons to claim channel
+    claim_channel = bot.get_channel(CLAIM_CHANNEL_ID)
+    if claim_channel:
+        entry_embed = _build_entry_embed(n_mode, player, region_u, interaction.user.mention)
         view = QueueView(status="waiting")
-        msg = await queue_channel.send(embed=entry_embed, view=view)
+        msg = await claim_channel.send(embed=entry_embed, view=view)
         db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
 
     await _refresh_queue_channel(bot)
