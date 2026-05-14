@@ -668,6 +668,17 @@ class TierModal(discord.ui.Modal, title="Assign Tier"):
             hide_action=True,
         )
 
+        notif = interaction.client.get_channel(TESTER_NOTIF_CHANNEL_ID)
+        if notif:
+            n_embed = discord.Embed(title="Tier Assigned", color=0xf59e0b)
+            n_embed.add_field(name="IGN", value=ign, inline=True)
+            n_embed.add_field(name="Gamemode", value=n_mode, inline=True)
+            n_embed.add_field(name="Region", value=region, inline=True)
+            n_embed.add_field(name="Tier", value=t_up, inline=True)
+            n_embed.add_field(name="Status", value=status, inline=True)
+            n_embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
+            await notif.send(embed=n_embed)
+
         await interaction.response.send_message(f"**{ign}** ranked {t_up} in {n_mode} ({status}).", ephemeral=True)
 
 
@@ -722,6 +733,16 @@ class ClaimModal(discord.ui.Modal, title="Claim Queue"):
             await _send_or_edit_status()
         except Exception:
             pass
+        notif = interaction.client.get_channel(TESTER_NOTIF_CHANNEL_ID)
+        if notif:
+            n_embed = discord.Embed(title="Claimed", color=0x34d399)
+            n_embed.add_field(name="Player", value=q["username"], inline=True)
+            n_embed.add_field(name="Gamemode", value=gamemode, inline=True)
+            n_embed.add_field(name="Region", value=region, inline=True)
+            n_embed.add_field(name="Server", value=server, inline=True)
+            n_embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
+            await notif.send(embed=n_embed)
+
         msg = f"Claimed **{q['username']}** for {gamemode} on {server}."
         if not dm_ok:
             msg += " ⚠️ Could not DM the player (DMs closed or no Discord linked)."
