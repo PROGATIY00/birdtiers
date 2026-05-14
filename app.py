@@ -970,15 +970,29 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
 
 
 @bot.tree.command(name="online")
-async def tester_online(interaction: discord.Interaction, gamemodes: str, region: str):
+async def tester_online(interaction: discord.Interaction, region: str, gamemodes: str = None):
     """Mark yourself available for testing with your gamemodes and region"""
-    parsed = [normalize_mode(m.strip()) for m in gamemodes.split(",")]
-    parsed = [m for m in parsed if m in MODES]
-    if not parsed:
-        return await interaction.response.send_message(f"No valid gamemodes. Choose from: {', '.join(MODES)}", ephemeral=True)
     region_u = region.upper().strip()
     if region_u not in REGION_COLORS:
         return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_COLORS.keys())}", ephemeral=True)
+
+    existing = db_mgr.tester_profiles.find_one({"discord_id": interaction.user.id})
+    old_modes = set(existing.get("gamemodes", [])) if existing else set()
+
+    if gamemodes:
+        parsed = set(normalize_mode(m.strip()) for m in gamemodes.split(","))
+        parsed = {m for m in parsed if m in MODES}
+    else:
+        parsed = set()
+
+    if not parsed and not old_modes:
+        parsed = set(MODES)  # Default: all modes
+    elif not parsed:
+        parsed = old_modes  # Keep existing
+    else:
+        parsed = old_modes | parsed  # Merge
+
+    parsed_list = sorted(parsed)
 
     ign = None
     player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id})
@@ -990,19 +1004,20 @@ async def tester_online(interaction: discord.Interaction, gamemodes: str, region
         {"$set": {
             "ign": ign or interaction.user.display_name,
             "region": region_u,
-            "gamemodes": parsed,
+            "gamemodes": parsed_list,
             "online": True,
             "ts": datetime.datetime.utcnow(),
         }},
         upsert=True,
     )
 
-    modes_str = ", ".join(parsed)
+    modes_str = ", ".join(parsed_list)
     embed = discord.Embed(title="You're now online!", color=0x34d399)
     embed.add_field(name="IGN", value=ign or "Not set", inline=True)
     embed.add_field(name="Region", value=region_u, inline=True)
     embed.add_field(name="Testing", value=modes_str, inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+    await _refresh_queue_channel(interaction.client)
 
 @bot.tree.command(name="offline")
 async def tester_offline(interaction: discord.Interaction):
@@ -1012,6 +1027,7 @@ async def tester_offline(interaction: discord.Interaction):
         {"$set": {"online": False, "ts": datetime.datetime.utcnow()}},
     )
     await interaction.response.send_message("You're now **offline** for testing.", ephemeral=True)
+    await _refresh_queue_channel(interaction.client)
 
 
 def _is_gamemode_closed(gamemode):
