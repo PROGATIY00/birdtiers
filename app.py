@@ -1,6 +1,7 @@
 import asyncio
 import discord
 from discord import app_commands
+from discord.ext import tasks
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify
 from pymongo import MongoClient
 from bson.objectid import ObjectId
@@ -350,8 +351,20 @@ class MagmaBot(discord.Client):
         status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
         if status_doc and status_doc.get("message_id"):
             self.add_view(JoinQueueView(), message_id=status_doc["message_id"])
+        refresh_queue_status.start()
 
 bot = MagmaBot()
+
+@tasks.loop(minutes=2)
+async def refresh_queue_status():
+    try:
+        await _refresh_queue_channel(bot)
+    except Exception:
+        pass
+    try:
+        await _send_or_edit_status()
+    except Exception:
+        pass
 
 @bot.tree.command(name="rank")
 async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: str, tier: str, region: str, reason: str):
@@ -603,6 +616,61 @@ def _build_tester_notif_embed(n_mode, player, region_u, queued_by):
     return embed
 
 
+class TierModal(discord.ui.Modal, title="Assign Tier"):
+    def __init__(self, queue_entry):
+        super().__init__()
+        self.queue_entry = queue_entry
+        self.add_item(discord.ui.TextInput(label="IGN", default=queue_entry["username"], required=True, max_length=30))
+        self.add_item(discord.ui.TextInput(label="Gamemode", default=queue_entry["gamemode"], required=True, max_length=20))
+        self.add_item(discord.ui.TextInput(label="Region", default=queue_entry["region"], required=True, max_length=5))
+        self.add_item(discord.ui.TextInput(label="Tier", placeholder="e.g. S, A, B, C, D, Unranked", required=True, max_length=20))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ign = self.children[0].value.strip()
+        gamemode = self.children[1].value.strip()
+        region = self.children[2].value.strip().upper()
+        tier = self.children[3].value.strip().upper()
+
+        t_up = normalize_tier(tier)
+        if not t_up or get_tier_value(t_up) == 0:
+            return await interaction.response.send_message(f"Invalid tier. Valid: {', '.join(TIER_ORDER)}", ephemeral=True)
+
+        n_mode = normalize_mode(gamemode)
+        if n_mode not in MODES:
+            return await interaction.response.send_message(f"Invalid gamemode.", ephemeral=True)
+        if region not in REGION_COLORS:
+            return await interaction.response.send_message(f"Invalid region.", ephemeral=True)
+
+        existing = db_mgr.players.find_one({"username": ign, "gamemode": n_mode})
+        old_tier = existing.get("tier") if existing else None
+        old_value = get_tier_value(old_tier) if old_tier else 0
+        new_value = get_tier_value(t_up)
+        status = "promoted" if new_value > old_value else "demoted" if new_value < old_value else "updated"
+        existing_peak = existing.get("peak_tier") if existing else None
+        new_peak = t_up if (existing_peak is None or new_value > get_tier_value(existing_peak)) else existing_peak
+
+        db_mgr.players.update_one(
+            {"username": ign, "gamemode": n_mode},
+            {"$set": {
+                "tier": t_up, "peak_tier": new_peak, "region": region,
+                "discord_id": self.queue_entry.get("discord_id"),
+                "tester": interaction.user.id,
+                "retired": False, "banned": False, "ts": datetime.datetime.utcnow()
+            }},
+            upsert=True,
+        )
+
+        await log_action(
+            "TIER UPDATE",
+            f"{interaction.user.mention} {ign} {status} to {t_up} {n_mode}",
+            interaction,
+            public=True,
+            hide_action=True,
+        )
+
+        await interaction.response.send_message(f"**{ign}** ranked {t_up} in {n_mode} ({status}).", ephemeral=True)
+
+
 class ClaimModal(discord.ui.Modal, title="Claim Queue"):
     def __init__(self, queue_entry):
         super().__init__()
@@ -649,16 +717,7 @@ class ClaimModal(discord.ui.Modal, title="Claim Queue"):
         embed.set_footer(text=f"Claimed by {interaction.user}")
         new_view = QueueView(status="claimed", claimed_by=interaction.user.id)
         await interaction.response.edit_message(embed=embed, view=new_view)
-        try:
-            q_embed = _update_queue_channel()
-            queue_channel = interaction.client.get_channel(QUEUE_CHANNEL_ID)
-            if queue_channel:
-                status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
-                if status_doc and status_doc.get("message_id"):
-                    status_msg = await queue_channel.fetch_message(status_doc["message_id"])
-                    await status_msg.edit(embed=q_embed)
-        except Exception:
-            pass
+        await _refresh_queue_channel(interaction.client)
         try:
             await _send_or_edit_status()
         except Exception:
@@ -675,6 +734,8 @@ class QueueView(discord.ui.View):
         for child in self.children:
             if child.custom_id == "queue_claim":
                 child.disabled = (status != "waiting")
+            elif child.custom_id == "queue_tier":
+                child.disabled = (status != "claimed")
             elif child.custom_id == "queue_done":
                 child.disabled = (status != "claimed")
 
@@ -686,6 +747,13 @@ class QueueView(discord.ui.View):
         if not interaction.user.guild_permissions.manage_roles:
             return await interaction.response.send_message("No permission.", ephemeral=True)
         await interaction.response.send_modal(ClaimModal(q))
+
+    @discord.ui.button(label="Tier", style=discord.ButtonStyle.secondary, custom_id="queue_tier")
+    async def tier(self, interaction: discord.Interaction, button: discord.ui.Button):
+        q = db_mgr.queues.find_one({"message_id": interaction.message.id, "channel_id": interaction.channel_id})
+        if not q or q["status"] != "claimed":
+            return await interaction.response.send_message("Claim the queue first.", ephemeral=True)
+        await interaction.response.send_modal(TierModal(q))
 
     @discord.ui.button(label="Done", style=discord.ButtonStyle.success, custom_id="queue_done")
     async def done(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -708,16 +776,7 @@ class QueueView(discord.ui.View):
         for child in new_view.children:
             child.disabled = True
         await interaction.response.edit_message(embed=embed, view=new_view)
-        try:
-            q_embed = _update_queue_channel()
-            queue_channel = interaction.client.get_channel(QUEUE_CHANNEL_ID)
-            if queue_channel:
-                status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
-                if status_doc and status_doc.get("message_id"):
-                    status_msg = await queue_channel.fetch_message(status_doc["message_id"])
-                    await status_msg.edit(embed=q_embed)
-        except Exception:
-            pass
+        await _refresh_queue_channel(interaction.client)
         try:
             await _send_or_edit_status()
         except Exception:
@@ -786,6 +845,29 @@ def _update_queue_channel():
     embed.add_field(name="Est. Wait", value=eta, inline=True)
     embed.set_footer(text=f"{len(testers)} tester{'s' if len(testers) != 1 else ''} online")
     return embed
+
+async def _refresh_queue_channel(bot_client):
+    try:
+        q_embed = _update_queue_channel()
+        channel = bot_client.get_channel(QUEUE_CHANNEL_ID)
+        if not channel:
+            return
+        doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
+        if doc and doc.get("message_id"):
+            try:
+                msg = await channel.fetch_message(doc["message_id"])
+                await msg.edit(embed=q_embed)
+                return
+            except Exception:
+                pass
+        # Delete any old status messages and send fresh
+        async for old in channel.history(limit=30):
+            if old.author.id == bot_client.user.id and old.embeds and old.embeds[0].title == "Magmatiers Testing Queue":
+                await old.delete()
+        msg = await channel.send(embed=q_embed, view=JoinQueueView())
+        db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": msg.id}}, upsert=True)
+    except Exception:
+        pass
 
 def _update_status_channel():
     waiting = sorted(db_mgr.queues.find({"status": "waiting"}), key=lambda x: x.get("ts") or datetime.datetime.min)
@@ -879,21 +961,7 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
             msg = await queue_channel.send(embed=entry_embed, view=view)
             db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
 
-        # Update queue channel status embed
-        if queue_channel:
-            q_embed = _update_queue_channel()
-            status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
-            if status_doc and status_doc.get("message_id"):
-                try:
-                    status_msg = await queue_channel.fetch_message(status_doc["message_id"])
-                    await status_msg.edit(embed=q_embed)
-                except Exception:
-                    status_msg = await queue_channel.send(embed=q_embed, view=JoinQueueView())
-                    db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": status_msg.id}}, upsert=True)
-            else:
-                status_msg = await queue_channel.send(embed=q_embed, view=JoinQueueView())
-                db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": status_msg.id}}, upsert=True)
-
+        await _refresh_queue_channel(interaction.client)
         try:
             await _send_or_edit_status()
         except Exception:
@@ -947,20 +1015,7 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
         msg = await queue_channel.send(embed=entry_embed, view=view)
         db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
 
-        # Update queue channel status embed
-        q_embed = _update_queue_channel()
-        status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
-        if status_doc and status_doc.get("message_id"):
-            try:
-                status_msg = await queue_channel.fetch_message(status_doc["message_id"])
-                await status_msg.edit(embed=q_embed)
-            except Exception:
-                status_msg = await queue_channel.send(embed=q_embed, view=JoinQueueView())
-                db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": status_msg.id}}, upsert=True)
-        else:
-            status_msg = await queue_channel.send(embed=q_embed, view=JoinQueueView())
-            db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": status_msg.id}}, upsert=True)
-
+    await _refresh_queue_channel(bot)
     try:
         await _send_or_edit_status()
     except Exception:
