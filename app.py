@@ -17,6 +17,7 @@ MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
 TIER_LOG_CHANNEL_ID = 1502966105940164638
 QUEUE_CHANNEL_ID = 1497963555541225472
+STATUS_CHANNEL_ID = 1497989003721310249
 TESTER_NOTIF_CHANNEL_ID = 1504206348324311131
 
 
@@ -346,6 +347,9 @@ class MagmaBot(discord.Client):
             status = q.get("status", "waiting")
             claimed_by = q.get("claimed_by")
             self.add_view(QueueView(status=status, claimed_by=claimed_by), message_id=q["message_id"])
+        status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
+        if status_doc and status_doc.get("message_id"):
+            self.add_view(JoinQueueView(), message_id=status_doc["message_id"])
 
 bot = MagmaBot()
 
@@ -751,10 +755,22 @@ class QueueView(discord.ui.View):
 
 
 def _update_queue_channel():
-    total = db_mgr.queues.count_documents({"status": "waiting"})
-    waiting = list(db_mgr.queues.find({"status": "waiting"}))
+    testers = _get_tester_profiles()
+    embed = discord.Embed(title="Magmatiers Testing Queue", color=0xff4500)
+    for mode in MODES:
+        online = [t for t in testers if mode in t.get("gamemodes", [])]
+        if online:
+            names = ", ".join(f"<@{t['discord_id']}>" for t in online)
+            embed.add_field(name=f"\U0001f7e2 {mode}", value=names, inline=False)
+        else:
+            embed.add_field(name=f"\U0001f534 {mode}", value="No testers online", inline=False)
+    total = len(testers)
+    embed.set_footer(text=f"{total} tester{'s' if total != 1 else ''} online")
+    return embed
 
-    # Summary counts
+def _update_status_channel():
+    waiting = list(db_mgr.queues.find({"status": "waiting"}).sort("ts", 1))
+    total = len(waiting)
     mode_counts = {}
     for q in waiting:
         mode_counts[q["gamemode"]] = mode_counts.get(q["gamemode"], 0) + 1
@@ -763,38 +779,105 @@ def _update_queue_channel():
     closed = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
     closed_modes = closed.get("modes", []) if closed else []
 
-    # Show only waiting entries (as requested)
-    waiting_sorted = sorted(waiting, key=lambda x: x.get("ts") or datetime.datetime.min)
-    limit = 10
-    top_waiting = waiting_sorted[:limit]
-    more_count = max(0, len(waiting_sorted) - limit)
-
     lines = []
-    for q in top_waiting:
-        # Keep it compact so it fits nicely in an embed field
-        player = q.get("username", "?")
-        gm = q.get("gamemode", "?")
-        reg = (q.get("region") or "NA").upper()
-        lines.append(f"• {player} — {gm} ({reg})")
+    for q in waiting[:15]:
+        lines.append(f"• {q['username']} — {q['gamemode']} ({q['region']})")
+    if len(waiting) > 15:
+        lines.append(f"• +{len(waiting) - 15} more")
     if not lines:
-        lines = ["• None" ]
-
-    if more_count:
-        lines.append(f"• +{more_count} more")
-
-    embed = discord.Embed(title="Join Queue", color=0xff4500)
-    embed.description = "Use `/queue <player> <gamemode> <region>` or the button below to join."
-    embed.add_field(name="Active Queues", value=modes_str, inline=False)
-    embed.add_field(name="Total Waiting", value=str(total), inline=True)
-    if closed_modes:
-        embed.add_field(name="Closed", value=", ".join(closed_modes), inline=True)
-
-    embed.add_field(name="Waiting Entries", value="\n".join(lines), inline=False)
+        lines = ["• None"]
 
     testers = _get_tester_profiles()
+    embed = discord.Embed(title="Queue Status", color=0xf59e0b)
+    embed.add_field(name="Active Queues", value=modes_str, inline=False)
+    embed.add_field(name="Total Waiting", value=str(total), inline=True)
     embed.add_field(name="Online Testers", value=str(len(testers)), inline=True)
-    embed.set_footer(text="Updated just now")
+    if closed_modes:
+        embed.add_field(name="Closed", value=", ".join(closed_modes), inline=True)
+    embed.add_field(name="Waiting List", value="\n".join(lines), inline=False)
+    embed.set_footer(text=f"Updated just now")
     return embed
+
+async def _send_or_edit_status():
+    embed = _update_status_channel()
+    channel = bot.get_channel(STATUS_CHANNEL_ID)
+    if not channel:
+        return
+    doc = db_mgr.settings.find_one({"_id": "status_msg_id"})
+    if doc and doc.get("message_id"):
+        try:
+            msg = await channel.fetch_message(doc["message_id"])
+            await msg.edit(embed=embed)
+            return
+        except Exception:
+            pass
+    msg = await channel.send(embed=embed)
+    db_mgr.settings.update_one({"_id": "status_msg_id"}, {"$set": {"message_id": msg.id}}, upsert=True)
+
+
+class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
+    def __init__(self):
+        super().__init__()
+        self.add_item(discord.ui.TextInput(label="IGN", placeholder="Your Minecraft username", required=True, max_length=30))
+        self.add_item(discord.ui.TextInput(label="Gamemode", placeholder="e.g. Crystal, UHC, Pot", required=True, max_length=20))
+        self.add_item(discord.ui.TextInput(label="Region", placeholder="NA, EU, AS, SA, OC, AF", required=True, max_length=5))
+        self.add_item(discord.ui.TextInput(label="Recommended Server", placeholder="e.g. 0.0.0.0:25565", required=True, max_length=100))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ign = self.children[0].value.strip()
+        gamemode = self.children[1].value.strip()
+        region = self.children[2].value.strip().upper()
+        server = self.children[3].value.strip()
+
+        n_mode = normalize_mode(gamemode)
+        if n_mode not in MODES:
+            return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
+        if region not in REGION_COLORS:
+            return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_COLORS.keys())}", ephemeral=True)
+        if _is_gamemode_closed(n_mode):
+            return await interaction.response.send_message(f"**{n_mode}** is currently closed in the queue.", ephemeral=True)
+
+        entry = {
+            "username": ign, "discord_id": interaction.user.id,
+            "gamemode": n_mode, "region": region,
+            "status": "waiting", "claimed_by": None,
+            "message_id": None, "channel_id": TESTER_NOTIF_CHANNEL_ID,
+            "ts": datetime.datetime.utcnow(),
+        }
+        queue_id = db_mgr.queues.insert_one(entry).inserted_id
+
+        notif_channel = interaction.client.get_channel(TESTER_NOTIF_CHANNEL_ID)
+        if notif_channel:
+            notif_embed = _build_tester_notif_embed(n_mode, ign, region, interaction.user.mention)
+            view = QueueView(status="waiting")
+            msg = await notif_channel.send(embed=notif_embed, view=view)
+            db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
+
+        q_embed = _update_queue_channel()
+        queue_channel = interaction.client.get_channel(QUEUE_CHANNEL_ID)
+        if queue_channel:
+            status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
+            if status_doc and status_doc.get("message_id"):
+                try:
+                    status_msg = await queue_channel.fetch_message(status_doc["message_id"])
+                    await status_msg.edit(embed=q_embed)
+                except Exception:
+                    status_msg = await queue_channel.send(embed=q_embed, view=JoinQueueView())
+                    db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": status_msg.id}}, upsert=True)
+            else:
+                status_msg = await queue_channel.send(embed=q_embed, view=JoinQueueView())
+                db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": status_msg.id}}, upsert=True)
+
+        await interaction.response.send_message(f"You've been queued for **{n_mode}** ({region})!", ephemeral=True)
+
+
+class JoinQueueView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Join Queue", style=discord.ButtonStyle.primary, custom_id="join_queue")
+    async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(JoinQueueModal())
 
 
 @bot.tree.command(name="queue")
@@ -820,7 +903,6 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
     }
     queue_id = db_mgr.queues.insert_one(entry).inserted_id
 
-    # Send to tester notif channel (1 message per queue)
     notif_channel = bot.get_channel(TESTER_NOTIF_CHANNEL_ID)
     if not notif_channel:
         return await interaction.response.send_message("Tester notification channel not found.", ephemeral=True)
@@ -829,7 +911,6 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
     msg = await notif_channel.send(embed=embed, view=view)
     db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
 
-    # Update queue channel status message
     queue_channel = bot.get_channel(QUEUE_CHANNEL_ID)
     if queue_channel:
         q_embed = _update_queue_channel()
@@ -839,10 +920,10 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
                 status_msg = await queue_channel.fetch_message(status_doc["message_id"])
                 await status_msg.edit(embed=q_embed)
             except Exception:
-                status_msg = await queue_channel.send(embed=q_embed)
+                status_msg = await queue_channel.send(embed=q_embed, view=JoinQueueView())
                 db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": status_msg.id}}, upsert=True)
         else:
-            status_msg = await queue_channel.send(embed=q_embed)
+            status_msg = await queue_channel.send(embed=q_embed, view=JoinQueueView())
             db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": status_msg.id}}, upsert=True)
 
     await interaction.response.send_message(f"Queued **{player}** for {n_mode} ({region_u}).", ephemeral=True)
