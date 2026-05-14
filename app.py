@@ -643,7 +643,7 @@ class ClaimModal(discord.ui.Modal, title="Claim Queue"):
         embed.add_field(name="Player", value=q["username"], inline=True)
         embed.add_field(name="Gamemode", value=gamemode, inline=True)
         embed.add_field(name="Region", value=region, inline=True)
-        embed.add_field(name="Server", value=server, inline=False)
+        embed.add_field(name="Server", value=server, inline=True)
         embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
         embed.add_field(name="Status", value="Claimed ✅", inline=True)
         embed.set_footer(text=f"Claimed by {interaction.user}")
@@ -755,20 +755,40 @@ class QueueView(discord.ui.View):
 
 def _update_queue_channel():
     testers = _get_tester_profiles()
+    waiting = sorted(db_mgr.queues.find({"status": "waiting"}), key=lambda x: x.get("ts") or datetime.datetime.min)
+
     embed = discord.Embed(title="Magmatiers Testing Queue", color=0xff4500)
     for mode in MODES:
         online = [t for t in testers if mode in t.get("gamemodes", [])]
         if online:
             names = ", ".join(f"<@{t['discord_id']}>" for t in online)
-            embed.add_field(name=f"\U0001f7e2 {mode}", value=names, inline=False)
+            embed.add_field(name=f"\U0001f7e2 {mode}", value=names, inline=True)
         else:
-            embed.add_field(name=f"\U0001f534 {mode}", value="No testers online", inline=False)
-    total = len(testers)
-    embed.set_footer(text=f"{total} tester{'s' if total != 1 else ''} online")
+            embed.add_field(name=f"\U0001f534 {mode}", value="No testers online", inline=True)
+
+    lines = []
+    for w in waiting[:10]:
+        lines.append(f"• {w['username']} — {w['gamemode']} ({w['region']})")
+    if len(waiting) > 10:
+        lines.append(f"• +{len(waiting) - 10} more")
+    if not lines:
+        lines = ["• None"]
+
+    embed.add_field(name=f"Waiting ({len(waiting)})", value="\n".join(lines), inline=True)
+
+    if not testers:
+        eta = "No testers available"
+    elif not waiting:
+        eta = "No queue"
+    else:
+        mins = max(5, (len(waiting) // max(len(testers), 1)) * 12)
+        eta = f"~{mins} min"
+    embed.add_field(name="Est. Wait", value=eta, inline=True)
+    embed.set_footer(text=f"{len(testers)} tester{'s' if len(testers) != 1 else ''} online")
     return embed
 
 def _update_status_channel():
-    waiting = list(db_mgr.queues.find({"status": "waiting"}).sort("ts", 1))
+    waiting = sorted(db_mgr.queues.find({"status": "waiting"}), key=lambda x: x.get("ts") or datetime.datetime.min)
     total = len(waiting)
     mode_counts = {}
     for q in waiting:
@@ -788,12 +808,12 @@ def _update_status_channel():
 
     testers = _get_tester_profiles()
     embed = discord.Embed(title="Queue Status", color=0xf59e0b)
-    embed.add_field(name="Active Queues", value=modes_str, inline=False)
+    embed.add_field(name="Active Queues", value=modes_str, inline=True)
     embed.add_field(name="Total Waiting", value=str(total), inline=True)
     embed.add_field(name="Online Testers", value=str(len(testers)), inline=True)
     if closed_modes:
         embed.add_field(name="Closed", value=", ".join(closed_modes), inline=True)
-    embed.add_field(name="Waiting List", value="\n".join(lines), inline=False)
+    embed.add_field(name="Waiting List", value="\n".join(lines), inline=True)
     embed.set_footer(text=f"Updated just now")
     return embed
 
