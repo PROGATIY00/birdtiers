@@ -206,9 +206,10 @@ def get_skin_url(uuid):
 def get_player_head_url(username, size=32):
     username = (username or "Steve").strip()
     uuid = resolve_uuid(username)
-    ts = int(datetime.datetime.utcnow().timestamp())
     identifier = uuid or username
-    return f"https://minotar.net/helm/{identifier}/{size}?t={ts}"
+    # Fastest option: use minotar without per-request cache busting.
+    # Server-side refresh (every 15 minutes) updates the cached URLs.
+    return f"https://minotar.net/helm/{identifier}/{size}"
 
 # --- DISCORD BOT ---
 
@@ -1403,13 +1404,8 @@ def home():
     template = """
 <html><head><meta http-equiv="refresh" content="300"><title>MagmaTIERS</title>{{ s|safe }}</head>
     <script>
-      // Force-refresh Minecraft heads every 15s
-      setInterval(() => {
-        document.querySelectorAll('img[src*="minotar.net"]').forEach(img => {
-          const clean = img.src.split('?')[0];
-          if (img.src !== clean + '?t=' + Date.now()) img.src = clean + '?t=' + Date.now();
-        });
-      }, 15000);
+// Heads are refreshed server-side every 15 minutes (no client cache-busting)
+      
     </script>
     <body>
         <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
@@ -1505,7 +1501,7 @@ def home():
             {% set pc = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
             <a href="/?search={{ p.u }}&mode={{m}}" class="player-row{% if m and loop.index == 1 %} top-player{% endif %}">
                 <div style="font-weight:800;color:{{ pc }};">#{{ loop.index }}</div>
-                <img src="{{ p.head_url }}" onerror="this.src='https://minotar.net/helm/Steve/32?t='+Date.now();">
+                <img src="{{ p.head_url }}" onerror="this.src='https://minotar.net/helm/Steve/32';">
                 <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }};margin-left:10px;">{{ p.rank }}</span></div>
                 <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
                 <div style="text-align:right;color:var(--accent);font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
@@ -1762,7 +1758,7 @@ def head_status():
           <a href="/">← Home</a>
           <h1>Head Status</h1>
         </div>
-        <p style="color:#9ba3af;margin-bottom:16px;">Heads refresh every 5s. {len(players)} unique players shown.</p>
+        <p style="color:#9ba3af;margin-bottom:16px;">Heads refresh server-side every 15 minutes. {len(players)} unique players shown.</p>
         <div class="grid">
           {"".join(f'<div class="card"><img src="{p["head_url"]}" onerror="this.onerror=null;this.src=this.src.split(\'?\')[0]+\'?t=\'+Date.now();"><div class="name">{p["username"]}</div><div style="font-size:10px;color:#525768;">{p["region"]} · {p["tier"]}</div></div>' for p in players)}
         </div>
