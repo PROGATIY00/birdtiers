@@ -595,20 +595,11 @@ def _get_tester_profiles():
     return list(db_mgr.tester_profiles.find({"online": True}))
 
 def _build_tester_notif_embed(n_mode, player, region_u, queued_by):
-    testers = _get_tester_profiles()
     embed = discord.Embed(title=n_mode, color=0xff4500)
     embed.add_field(name="Player", value=player, inline=True)
     embed.add_field(name="Region", value=region_u, inline=True)
     embed.add_field(name="Queued By", value=queued_by, inline=True)
-    for mode in MODES:
-        online = [t for t in testers if mode in t.get("gamemodes", [])]
-        if online:
-            names = ", ".join(f"<@{t['discord_id']}>" for t in online)
-            embed.add_field(name=f"\U0001f7e2 {mode}", value=names, inline=False)
-        else:
-            embed.add_field(name=f"\U0001f534 {mode}", value="No testers online", inline=False)
-    total = len(testers)
-    embed.set_footer(text=f"{total} tester{'s' if total != 1 else ''} online")
+    embed.set_footer(text="1 in queue")
     return embed
 
 
@@ -849,21 +840,28 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
             "username": ign, "discord_id": interaction.user.id,
             "gamemode": n_mode, "region": region,
             "status": "waiting", "claimed_by": None,
-            "message_id": None, "channel_id": TESTER_NOTIF_CHANNEL_ID,
+            "message_id": None, "channel_id": QUEUE_CHANNEL_ID,
             "ts": datetime.datetime.utcnow(),
         }
         queue_id = db_mgr.queues.insert_one(entry).inserted_id
 
+        # Send simple notification to tester channel
         notif_channel = interaction.client.get_channel(TESTER_NOTIF_CHANNEL_ID)
         if notif_channel:
             notif_embed = _build_tester_notif_embed(n_mode, ign, region, interaction.user.mention)
-            view = QueueView(status="waiting")
-            msg = await notif_channel.send(embed=notif_embed, view=view)
-            db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
+            await notif_channel.send(embed=notif_embed)
 
-        q_embed = _update_queue_channel()
+        # Send queue entry with buttons to queue channel
         queue_channel = interaction.client.get_channel(QUEUE_CHANNEL_ID)
         if queue_channel:
+            entry_embed = _build_tester_notif_embed(n_mode, ign, region, interaction.user.mention)
+            view = QueueView(status="waiting")
+            msg = await queue_channel.send(embed=entry_embed, view=view)
+            db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
+
+        # Update queue channel status embed
+        if queue_channel:
+            q_embed = _update_queue_channel()
             status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
             if status_doc and status_doc.get("message_id"):
                 try:
@@ -910,21 +908,26 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
         "username": player, "discord_id": interaction.user.id,
         "gamemode": n_mode, "region": region_u,
         "status": "waiting", "claimed_by": None,
-        "message_id": None, "channel_id": TESTER_NOTIF_CHANNEL_ID,
+        "message_id": None, "channel_id": QUEUE_CHANNEL_ID,
         "ts": datetime.datetime.utcnow(),
     }
     queue_id = db_mgr.queues.insert_one(entry).inserted_id
 
+    # Send simple notification to tester channel
     notif_channel = bot.get_channel(TESTER_NOTIF_CHANNEL_ID)
-    if not notif_channel:
-        return await interaction.response.send_message("Tester notification channel not found.", ephemeral=True)
-    embed = _build_tester_notif_embed(n_mode, player, region_u, interaction.user.mention)
-    view = QueueView(status="waiting")
-    msg = await notif_channel.send(embed=embed, view=view)
-    db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
+    if notif_channel:
+        notif_embed = _build_tester_notif_embed(n_mode, player, region_u, interaction.user.mention)
+        await notif_channel.send(embed=notif_embed)
 
+    # Send queue entry with buttons to queue channel
     queue_channel = bot.get_channel(QUEUE_CHANNEL_ID)
     if queue_channel:
+        entry_embed = _build_tester_notif_embed(n_mode, player, region_u, interaction.user.mention)
+        view = QueueView(status="waiting")
+        msg = await queue_channel.send(embed=entry_embed, view=view)
+        db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
+
+        # Update queue channel status embed
         q_embed = _update_queue_channel()
         status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
         if status_doc and status_doc.get("message_id"):
