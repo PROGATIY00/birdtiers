@@ -668,6 +668,10 @@ class ClaimModal(discord.ui.Modal, title="Claim Queue"):
                     await status_msg.edit(embed=q_embed)
         except Exception:
             pass
+        try:
+            await _send_or_edit_status()
+        except Exception:
+            pass
         msg = f"Claimed **{q['username']}** for {gamemode} on {server}."
         if not dm_ok:
             msg += " ⚠️ Could not DM the player (DMs closed or no Discord linked)."
@@ -721,6 +725,10 @@ class QueueView(discord.ui.View):
                 if status_doc and status_doc.get("message_id"):
                     status_msg = await queue_channel.fetch_message(status_doc["message_id"])
                     await status_msg.edit(embed=q_embed)
+        except Exception:
+            pass
+        try:
+            await _send_or_edit_status()
         except Exception:
             pass
 
@@ -868,6 +876,10 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
                 status_msg = await queue_channel.send(embed=q_embed, view=JoinQueueView())
                 db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": status_msg.id}}, upsert=True)
 
+        try:
+            await _send_or_edit_status()
+        except Exception:
+            pass
         await interaction.response.send_message(f"You've been queued for **{n_mode}** ({region})!", ephemeral=True)
 
 
@@ -926,6 +938,10 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
             status_msg = await queue_channel.send(embed=q_embed, view=JoinQueueView())
             db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": status_msg.id}}, upsert=True)
 
+    try:
+        await _send_or_edit_status()
+    except Exception:
+        pass
     await interaction.response.send_message(f"Queued **{player}** for {n_mode} ({region_u}).", ephemeral=True)
 
 
