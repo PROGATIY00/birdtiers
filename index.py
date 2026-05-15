@@ -684,7 +684,12 @@ class ClaimModal(discord.ui.Modal, title="Claim Queue"):
         try:
             category = interaction.guild.get_channel(PARTNER_CATEGORY_ID) if interaction.guild else None
             if category and isinstance(category, discord.CategoryChannel):
-                player_member = interaction.guild.get_member(player_doc["discord_id"]) if player_doc and player_doc.get("discord_id") else None
+                player_discord_id = None
+                if player_doc and player_doc.get("discord_id"):
+                    player_discord_id = player_doc["discord_id"]
+                elif q.get("discord_id"):
+                    player_discord_id = q["discord_id"]
+                player_member = interaction.guild.get_member(player_discord_id) if player_discord_id else None
                 overwrites = {
                     interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
                     interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
@@ -1724,6 +1729,18 @@ def status_json():
 
     return render_template("status.html", web_ok=web_ok, discord_ready=discord_ready, TOKEN=TOKEN,
         db_ok=db_ok, backups_ok=backups_ok, maint=maint, DB_NAME=DB_NAME, BACKUP_DIR=BACKUP_DIR)
+
+
+@app.route('/queue-status')
+def queue_status_page():
+    waiting = list(db_mgr.queues.find({"status": "waiting"}))
+    testers = _get_tester_profiles()
+    try:
+        q_embed = _update_queue_channel()
+        embed_data = {"title": q_embed.title, "fields": [{"name": f.name, "value": f.value} for f in q_embed.fields], "footer": q_embed.footer.text if q_embed.footer else ""}
+    except Exception:
+        embed_data = None
+    return render_template("queue_status.html", waiting=waiting, testers=testers, embed=embed_data)
 
 
 @app.route('/heads')
