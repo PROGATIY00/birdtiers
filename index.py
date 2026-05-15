@@ -1526,8 +1526,44 @@ def link_check(code):
     if not doc:
         return jsonify({"claimed": False, "error": "not_found"})
     if doc.get("claimed"):
-        return jsonify({"claimed": True, "discord_name": doc.get("discord_name", "Unknown")})
+        return jsonify({"claimed": True, "discord_name": doc.get("discord_name", "Unknown"), "discord_id": doc.get("discord_id")})
     return jsonify({"claimed": False})
+
+@app.route('/api/partner/status/<discord_id>')
+def partner_status(discord_id):
+    try:
+        did = int(discord_id)
+    except (ValueError, TypeError):
+        return jsonify({"notifications": []})
+    subs = sorted(db_mgr.partners.find({"discord_id": did}), key=lambda x: x.get("ts") or datetime.datetime.min, reverse=True)[:5]
+    notifs = []
+    for s in subs:
+        st = s.get("status", "pending")
+        if st not in ("pending", "Pending Review"):
+            notifs.append({
+                "sub_id": str(s["_id"]),
+                "title": s.get("title", ""),
+                "status": st,
+                "ts": s.get("ts").strftime("%Y-%m-%d %H:%M UTC") if s.get("ts") else "",
+            })
+    return jsonify({"notifications": notifs})
+
+@app.route('/api/ads')
+def partner_ads():
+    ads = list(db_mgr.partners.find({"status": "Approved ✅"}))
+    import random
+    if not ads:
+        return jsonify({"ad": None})
+    ad = random.choice(ads)
+    return jsonify({
+        "ad": {
+            "title": ad.get("title", ""),
+            "description": ad.get("description", ""),
+            "ign": ad.get("ign", ""),
+            "type": ad.get("type", ""),
+            "proof": ad.get("proof") or None,
+        }
+    })
 
 @app.route('/discord')
 def discord_redirect():
