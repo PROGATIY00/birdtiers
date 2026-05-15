@@ -22,6 +22,7 @@ STATUS_CHANNEL_ID = 1497989003721310249
 TESTER_NOTIF_CHANNEL_ID = 1504206348324311131
 CLAIM_CHANNEL_ID = 1504206348324311131
 PARTNER_CHANNEL_ID = 1502975682513473787
+PARTNER_CATEGORY_ID = 1498359340065624165
 
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
@@ -679,6 +680,28 @@ class ClaimModal(discord.ui.Modal, title="Claim Queue"):
         embed.set_footer(text=f"Claimed by {interaction.user}")
         new_view = QueueView(status="claimed", claimed_by=interaction.user.id)
         await interaction.response.edit_message(embed=embed, view=new_view)
+
+        try:
+            category = interaction.guild.get_channel(PARTNER_CATEGORY_ID) if interaction.guild else None
+            if category and isinstance(category, discord.CategoryChannel):
+                player_member = interaction.guild.get_member(player_doc["discord_id"]) if player_doc and player_doc.get("discord_id") else None
+                overwrites = {
+                    interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                }
+                if player_member:
+                    overwrites[player_member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                overwrites[interaction.user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                safe_name = q["username"].replace(" ", "-").lower()[:20]
+                chan = await category.create_text_channel(f"test-{safe_name}-{gamemode.lower()[:5]}", overwrites=overwrites)
+                await chan.send(
+                    f"**Test Session**\nPlayer: {q['username']} {player_member.mention if player_member else ''}\n"
+                    f"Tester: {interaction.user.mention}\nGamemode: {gamemode}\nRegion: {region}\nServer: {server}"
+                )
+                db_mgr.queues.update_one({"_id": q["_id"]}, {"$set": {"test_channel_id": chan.id}})
+        except Exception:
+            pass
+
         await _refresh_queue_channel(interaction.client)
         try:
             await _send_or_edit_status()
@@ -955,17 +978,40 @@ class PartnerView(discord.ui.View):
         self.channel_id = channel_id
 
     async def _update(self, interaction, new_status, color):
-        doc = db_mgr.partners.find_one({"_id": ObjectId(self.sub_id)})
-        if not doc:
-            return await interaction.response.send_message("Submission not found.", ephemeral=True)
-        db_mgr.partners.update_one({"_id": ObjectId(self.sub_id)}, {"$set": {"status": new_status}})
-        embed = interaction.message.embeds[0]
-        embed.color = color
-        embed.remove_field(len(embed.fields) - 1)  # Remove old Status field
-        embed.add_field(name="Status", value=new_status, inline=True)
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.response.defer()
+        try:
+            doc = db_mgr.partners.find_one({"_id": ObjectId(self.sub_id)})
+            if not doc:
+                return await interaction.followup.send("Submission not found.", ephemeral=True)
+            db_mgr.partners.update_one({"_id": ObjectId(self.sub_id)}, {"$set": {"status": new_status}})
+            embed = interaction.message.embeds[0]
+            embed.color = color
+            old_count = len(embed.fields)
+            embed.remove_field(old_count - 1)
+            embed.add_field(name="Status", value=new_status, inline=True)
+            for child in self.children:
+                child.disabled = True
+            await interaction.edit_original_response(embed=embed, view=self)
+
+            if "Approved" in new_status and doc.get("discord_id"):
+                try:
+                    category = interaction.guild.get_channel(PARTNER_CATEGORY_ID) if interaction.guild else None
+                    if category and isinstance(category, discord.CategoryChannel):
+                        ign = doc.get("ign", "partner")
+                        member = interaction.guild.get_member(doc["discord_id"])
+                        overwrites = {
+                            interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                            interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                        }
+                        if member:
+                            overwrites[member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                        chan = await category.create_text_channel(f"partner-{ign}", overwrites=overwrites)
+                        await chan.send(f"Welcome {member.mention if member else doc.get('discord_user', '')}! Your partner application has been approved.")
+                        db_mgr.partners.update_one({"_id": ObjectId(self.sub_id)}, {"$set": {"channel_id": chan.id}})
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="partner_accept")
     async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -994,6 +1040,23 @@ async def partner_cmd(interaction: discord.Interaction, action: str, submission_
     new_status = "Approved ✅" if action in ("accept", "approve") else "Declined ❌"
     color = 0x34d399 if action in ("accept", "approve") else 0xf87171
     db_mgr.partners.update_one({"_id": ObjectId(submission_id)}, {"$set": {"status": new_status}})
+    if "Approved" in new_status and doc.get("discord_id"):
+        try:
+            category = interaction.guild.get_channel(PARTNER_CATEGORY_ID) if interaction.guild else None
+            if category and isinstance(category, discord.CategoryChannel):
+                ign = doc.get("ign", "partner")
+                member = interaction.guild.get_member(doc["discord_id"])
+                overwrites = {
+                    interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                }
+                if member:
+                    overwrites[member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                chan = await category.create_text_channel(f"partner-{ign}", overwrites=overwrites)
+                await chan.send(f"Welcome {member.mention if member else doc.get('discord_user', '')}! Your partner application has been approved.")
+                db_mgr.partners.update_one({"_id": ObjectId(submission_id)}, {"$set": {"channel_id": chan.id}})
+        except Exception:
+            pass
     await interaction.response.send_message(f"Submission **{submission_id}** → {new_status}", ephemeral=True)
 
 
@@ -1464,6 +1527,11 @@ def partner():
         discord_id = code_doc.get("discord_id")
         discord_name = code_doc.get("discord_name", "Unknown#0000")
 
+        existing = db_mgr.partners.find_one({"discord_id": discord_id, "status": "Pending Review"})
+        if existing:
+            return render_template("partner.html", submitted=False,
+                error=f"You already have a pending application ({existing.get('title', 'Untitled')}). Please wait for staff to review it.")
+
         if not all([ign, ptype, title, description]):
             return render_template("partner.html", submitted=False, error="Please fill in all required fields.")
 
@@ -1492,9 +1560,12 @@ def partner():
             channel = bot.get_channel(PARTNER_CHANNEL_ID)
             if channel:
                 import asyncio
-                view = PartnerView(sub_id, PARTNER_CHANNEL_ID)
-                future = asyncio.run_coroutine_threadsafe(channel.send(embed=embed, view=view), bot.loop)
+                future = asyncio.run_coroutine_threadsafe(channel.send(embed=embed), bot.loop)
                 msg = future.result(timeout=10)
+                async def attach_view():
+                    view = PartnerView(sub_id, PARTNER_CHANNEL_ID)
+                    await msg.edit(view=view)
+                asyncio.run_coroutine_threadsafe(attach_view(), bot.loop).result(timeout=10)
                 db_mgr.partners.update_one({"_id": result.inserted_id}, {"$set": {"message_id": msg.id, "message_link": f"https://discord.com/channels/{msg.guild.id if msg.guild else 0}/{PARTNER_CHANNEL_ID}/{msg.id}"}})
         except Exception:
             pass
