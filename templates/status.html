@@ -1,0 +1,44 @@
+<html><head>
+<title>Status - MagmaTIERS</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<style>
+body { margin:0; font-family: Arial, Helvetica, sans-serif; background:#0b0c10; color:#f0f2f5; }
+.wrap { max-width: 900px; margin: 40px auto; padding: 0 16px; }
+.card { background:#14171f; border:1px solid #262932; border-radius:16px; padding:16px; margin-bottom:14px; }
+h1 { margin:0 0 6px; font-size: 28px; }
+h2 { margin:0 0 12px; font-size: 18px; color:#ff4500; }
+.row { display:flex; justify-content:space-between; gap:16px; padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.06); }
+.row:last-child { border-bottom:none; }
+.k { color:#9ba3af; font-weight:700; }
+.v { font-weight:800; text-align:right; }
+.pill { display:inline-block; padding:3px 10px; border-radius:999px; font-weight:800; border:1px solid rgba(255,255,255,0.12); }
+.ok { color:#34d399; border-color: rgba(52,211,153,0.35); background: rgba(52,211,153,0.08); }
+.bad { color:#f87171; border-color: rgba(248,113,113,0.35); background: rgba(248,113,113,0.08); }
+.muted { color:#9ba3af; }
+a { color:#ff4500; text-decoration:none; font-weight:800; }
+.top { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+.btn { padding:10px 14px; background:#ff4500; color:white; border-radius:12px; font-weight:900; }
+</style>
+</head><body>
+<div class="wrap">
+<div class="top">
+<div><h1>MagmaTIERS Status</h1><div class="muted">Updated just now</div></div>
+<div class="muted">API JSON: <a href="/status">/status</a></div>
+</div>
+<div class="card">
+<h2>Services</h2>
+<div class="row"><div class="k">Website</div><div class="v"><span class="pill {{ 'ok' if web_ok else 'bad' }}">{{ 'Online' if web_ok else 'Offline' }}</span></div></div>
+<div class="row"><div class="k">Discord bot</div><div class="v"><span class="pill {{ 'ok' if discord_ready and TOKEN else 'bad' }}">{{ 'Online' if discord_ready and TOKEN else 'Offline' }}</span></div></div>
+<div class="row"><div class="k">Database</div><div class="v"><span class="pill {{ 'ok' if db_ok else 'bad' }}">{{ 'Online' if db_ok else 'Offline' }}</span></div></div>
+<div class="row"><div class="k">Backups</div><div class="v"><span class="pill {{ 'ok' if backups_ok else 'bad' }}">{{ 'ENABLED' if backups_ok else 'DISABLED' }}</span></div></div>
+</div>
+<div class="card">
+<h2>Details</h2>
+<div class="row"><div class="k">Maintenance</div><div class="v"><span class="pill {{ 'ok' if not maint.get('active') else 'bad' }}">{{ 'OFF' if not maint.get('active') else 'ON' }}</span></div></div>
+<div class="row"><div class="k">Maintenance reason</div><div class="v">{{ maint.get('reason', '') if maint.get('active') else '' or '—' }}</div></div>
+<div class="row"><div class="k">Database name</div><div class="v">{{ DB_NAME }}</div></div>
+<div class="row"><div class="k">Backup dir</div><div class="v">{{ BACKUP_DIR }}</div></div>
+</div>
+<div style="text-align:center; margin-top:12px;" class="muted"><a href="/">← Back to website</a></div>
+</div>
+</body></html>

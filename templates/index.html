@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}MagmaTIERS{% endblock %}
+{% block content %}
+{% if spot %}
+<div class="modal-bg" onclick="window.location.href='/?mode={{m}}'">
+    <div class="profile-card" onclick="event.stopPropagation()">
+        <div class="profile-header">
+            <div class="profile-avatar-wrapper" style="border-color:{{ spot.placement_color }};">
+                <img src="{{ spot.head_url }}" class="profile-avatar">
+            </div>
+            <h2 class="profile-name">{{ spot.u }}</h2>
+            <div class="profile-rank">🏆 {{ spot.rank }}</div>
+            <div class="profile-region">{{ spot.region_name }}</div>
+            <a class="name-mc-button" href="https://namemc.com/profile/{{ spot.u }}" target="_blank">NameMC</a>
+        </div>
+        <div class="profile-body">
+            <div class="profile-section">
+                <h3>POSITION</h3>
+                <div class="position-box">
+                    <div class="position-number" style="color:{{ spot.placement_color }};">#{{ spot.position }}</div>
+                    <div style="font-weight:800;">{{ spot.position_label }} · {{ spot.best }}</div>
+                    <div style="color:#9ba3af;">({{ spot.score }} pts)</div>
+                </div>
+            </div>
+            <div class="profile-section">
+                <h3>TIERS</h3>
+                <div class="tier-grid">
+                    {% for k in spot.kits %}
+                    <div class="tier-card{% if k.retired %} retired{% endif %}{% if k.top_mode %} top-mode{% endif %}">
+                        <div class="peak-tooltip">{{ k.peak_label }}</div>
+                        <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img" onerror="this.onerror=null;this.src='{{ default_icon_url }}';">
+                        <div class="tier-label">{{ k.gamemode }}</div>
+                        <div class="tier-subtext">{{ k.tier }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if high_p and not spot %}
+<div class="container">
+    <div class="high-results">
+        <h2 style="margin:0 0 12px;font-size:1.2rem;">🏆 Top Players</h2>
+        {% for p in high_p[:5] %}
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+            <span class="badge" style="color:{{ p.rank_c }};">{{ p.rank }}</span>
+            <span style="font-weight:600;">{{ p.u }}</span>
+            <span style="color:#9ba3af;margin-left:auto;">{{ p.best }} · {{ p.score }} pts</span>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="container">
+    {% for p in players %}
+    {% set pc = 'gold' if loop.index == 1 else 'silver' if loop.index == 2 else '#cd7f32' if loop.index == 3 else '#9ba3af' %}
+    <a href="/?search={{ p.u }}&mode={{m}}" class="player-row{% if m and loop.index == 1 %} top-player{% endif %}">
+        <div style="font-weight:800;color:{{ pc }};">#{{ loop.index }}</div>
+        <img src="{{ p.head_url }}" onerror="this.src='https://minotar.net/helm/Steve/32';">
+        <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }};margin-left:10px;">{{ p.rank }}</span></div>
+        <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
+        <div style="text-align:right;color:var(--accent);font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
+    </a>
+    {% endfor %}
+</div>
+{% endblock %}

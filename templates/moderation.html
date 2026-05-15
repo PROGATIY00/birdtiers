@@ -1,0 +1,27 @@
+<html><head>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;800&display=swap');
+:root { --bg: #0b0c10; --card: #14171f; --accent: #ff4500; --text: #f0f2f5; --border: #262932; }
+body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; }
+.container { max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+h1 { font-size: 1.8rem; }
+.card { background:var(--card);padding:20px;border-radius:12px;margin-bottom:10px;border:1px solid var(--border); }
+button { padding:10px; border-radius:5px; cursor:pointer; font-weight:800; border:none; }
+a { color:var(--accent); text-decoration:none; font-weight:800; }
+</style>
+</head><body>
+<div class="container">
+<h1>Reports Queue</h1>
+{% for r in reps %}
+<div class="card">
+<h3>{{ r.player }}</h3><p>{{ r.reason }}</p>
+<form action="/moderation/resolve" method="POST">
+<input type="hidden" name="id" value="{{ r._id }}">
+<button name="a" value="approve" style="background:green;color:white;">Approve</button>
+<button name="a" value="decline" style="background:#444;color:white;">Decline</button>
+</form>
+</div>
+{% endfor %}
+<a href="/">← Back Home</a>
+</div>
+</body></html>

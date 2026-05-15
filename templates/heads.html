@@ -1,0 +1,36 @@
+<html><head>
+<title>Heads - MagmaTIERS</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<style>
+body { margin:0; font-family:Arial,Helvetica,sans-serif; background:#0b0c10; color:#f0f2f5; }
+.wrap { max-width:1000px; margin:0 auto; padding:16px; }
+h1 { font-size:24px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(80px,1fr)); gap:12px; }
+.card { background:#14171f; border:1px solid #262932; border-radius:12px; padding:12px; text-align:center; }
+.card img { width:64px; height:64px; border-radius:8px; image-rendering:pixelated; }
+.card .name { font-size:11px; color:#9ba3af; margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.nav { display:flex; gap:16px; align-items:center; margin-bottom:16px; }
+.nav a { color:#ff4500; text-decoration:none; font-weight:800; }
+</style>
+</head><body>
+<div class="wrap">
+<div class="nav"><a href="/">← Home</a><h1>Head Status</h1></div>
+<p style="color:#9ba3af;margin-bottom:16px;">Heads refresh server-side every 15 minutes. {{ player_count }} unique players shown.</p>
+<div class="grid">
+{% for p in players %}
+<div class="card">
+<img src="{{ p.head_url }}" onerror="this.onerror=null;this.src=this.src.split('?')[0]+'?t='+Date.now();">
+<div class="name">{{ p.username }}</div>
+<div style="font-size:10px;color:#525768;">{{ p.region }} · {{ p.tier }}</div>
+</div>
+{% endfor %}
+</div>
+</div>
+<script>
+setInterval(function() {
+    document.querySelectorAll('img[src*="minotar.net"]').forEach(function(img) {
+        img.src = img.src.split('?')[0] + '?t=' + Date.now();
+    });
+}, 5000);
+</script>
+</body></html>
