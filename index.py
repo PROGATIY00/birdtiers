@@ -156,6 +156,9 @@ def is_bot_offline() -> bool:
 def is_database_offline() -> bool:
     return _is_service_offline("database")
 
+def is_partner_offline() -> bool:
+    return _is_service_offline("partner")
+
 
 def _reject_if_database_offline(write: bool = False):
     if not is_database_offline():
@@ -358,6 +361,11 @@ class MagmaBot(discord.Client):
         status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
         if status_doc and status_doc.get("message_id"):
             self.add_view(JoinQueueView(), message_id=status_doc["message_id"])
+        for p in db_mgr.partners.find({"message_id": {"$ne": None}, "status": "Pending Review"}):
+            try:
+                self.add_view(PartnerView(str(p["_id"]), PARTNER_CHANNEL_ID), message_id=p["message_id"])
+            except Exception:
+                pass
         refresh_queue_status.start()
 
 bot = MagmaBot()
@@ -940,6 +948,55 @@ class JoinQueueView(discord.ui.View):
         await interaction.response.send_modal(JoinQueueModal())
 
 
+class PartnerView(discord.ui.View):
+    def __init__(self, sub_id, channel_id):
+        super().__init__(timeout=None)
+        self.sub_id = sub_id
+        self.channel_id = channel_id
+
+    async def _update(self, interaction, new_status, color):
+        doc = db_mgr.partners.find_one({"_id": ObjectId(self.sub_id)})
+        if not doc:
+            return await interaction.response.send_message("Submission not found.", ephemeral=True)
+        db_mgr.partners.update_one({"_id": ObjectId(self.sub_id)}, {"$set": {"status": new_status}})
+        embed = interaction.message.embeds[0]
+        embed.color = color
+        embed.remove_field(len(embed.fields) - 1)  # Remove old Status field
+        embed.add_field(name="Status", value=new_status, inline=True)
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="partner_accept")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_roles:
+            return await interaction.response.send_message("No permission.", ephemeral=True)
+        await self._update(interaction, "Approved ✅", 0x34d399)
+
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="partner_decline")
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_roles:
+            return await interaction.response.send_message("No permission.", ephemeral=True)
+        await self._update(interaction, "Declined ❌", 0xf87171)
+
+
+@bot.tree.command(name="partner")
+async def partner_cmd(interaction: discord.Interaction, action: str, submission_id: str):
+    """Review partner submissions (staff only)"""
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    action = action.lower().strip()
+    if action not in ("accept", "approve", "decline", "deny"):
+        return await interaction.response.send_message("Use: accept or decline", ephemeral=True)
+    doc = db_mgr.partners.find_one({"_id": ObjectId(submission_id)})
+    if not doc:
+        return await interaction.response.send_message("Submission not found.", ephemeral=True)
+    new_status = "Approved ✅" if action in ("accept", "approve") else "Declined ❌"
+    color = 0x34d399 if action in ("accept", "approve") else 0xf87171
+    db_mgr.partners.update_one({"_id": ObjectId(submission_id)}, {"$set": {"status": new_status}})
+    await interaction.response.send_message(f"Submission **{submission_id}** → {new_status}", ephemeral=True)
+
+
 @bot.tree.command(name="queue")
 async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str, region: str):
     """Queue a player for testing"""
@@ -1213,11 +1270,13 @@ async def service_toggle(
         "discord": "bot",
         "database": "database",
         "db": "database",
+        "partner": "partner",
+        "partners": "partner",
     }
 
     if service_l not in service_map:
         return await interaction.response.send_message(
-            "Invalid service. Use one of: web, bot, database",
+            "Invalid service. Use one of: web, bot, database, partner",
             ephemeral=True,
         )
 
@@ -1261,7 +1320,7 @@ def home():
     maint = is_maintenance_active()
 
     if maint.get('active'):
-        return f"<html><head>{STYLE}</head><body style='display:flex;justify-content:center;align-items:center;height:100vh;'><div class='container' style='text-align:center;'><h1>🛠️ {maint.get('reason')}</h1></div></body></html>"
+        return f"<html><head><style>body{{background:#0b0c10;color:#f0f2f5;font-family:Arial,sans-serif;}}h1{{color:#ff4500;}}</style></head><body style='display:flex;justify-content:center;align-items:center;height:100vh;'><div class='container' style='text-align:center;'><h1>🛠️ {maint.get('reason')}</h1></div></body></html>"
 
     mode_q = normalize_mode(request.args.get('mode', ''))
     search_q = request.args.get('search', '').lower()
@@ -1387,8 +1446,8 @@ def resolve():
 
 @app.route('/partner', methods=['GET', 'POST'])
 def partner():
-    if is_web_offline():
-        return "Website is offline by admin.", 503
+    if is_web_offline() or is_partner_offline():
+        return "Partner program is offline by admin.", 503
     if request.method == 'POST':
         ign = request.form.get('ign', '').strip()
         link_code = request.form.get('link_code', '').strip().upper()
@@ -1433,7 +1492,8 @@ def partner():
             channel = bot.get_channel(PARTNER_CHANNEL_ID)
             if channel:
                 import asyncio
-                future = asyncio.run_coroutine_threadsafe(channel.send(embed=embed), bot.loop)
+                view = PartnerView(sub_id, PARTNER_CHANNEL_ID)
+                future = asyncio.run_coroutine_threadsafe(channel.send(embed=embed, view=view), bot.loop)
                 msg = future.result(timeout=10)
                 db_mgr.partners.update_one({"_id": result.inserted_id}, {"$set": {"message_id": msg.id, "message_link": f"https://discord.com/channels/{msg.guild.id if msg.guild else 0}/{PARTNER_CHANNEL_ID}/{msg.id}"}})
         except Exception:
