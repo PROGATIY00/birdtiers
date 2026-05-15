@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Partner - MagmaTIERS{% endblock %}
+{% block extra_head %}
+<style>
+.code-box { background:#0f1117; border:2px dashed var(--accent); border-radius:16px; padding:24px; text-align:center; margin:20px 0; }
+.code-box .code { font-size:2.2rem; font-weight:800; letter-spacing:6px; color:var(--accent); font-family:monospace; margin:12px 0; }
+.code-box .status-dot { display:inline-block; width:12px; height:12px; border-radius:50%; margin-right:6px; }
+.status-dot.waiting { background:#f59e0b; animation:pulse 1.5s infinite; }
+.status-dot.claimed { background:#34d399; }
+@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+.spinner { display:inline-block; width:16px; height:16px; border:2px solid #525768; border-top-color:var(--accent); border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle; margin-right:8px; }
+@keyframes spin { to{transform:rotate(360deg);} }
+</style>
+{% endblock %}
+{% block content %}
+<div class="container" style="max-width:600px;">
+<h1>Partner Program</h1>
+<p style="color:#9ba3af;margin-bottom:20px;">Promote your content or server to the MagmaTIERS community.</p>
+
+{% if submitted %}
+<div style="background:#0f1729;border:1px solid #34d399;border-radius:16px;padding:24px;text-align:center;">
+    <div style="font-size:48px;margin-bottom:12px;">✅</div>
+    <h2 style="color:#34d399;margin:0 0 8px;">Submitted!</h2>
+    <p style="color:#9ba3af;">Your partner application has been sent.</p>
+    <div style="background:#0b0c10;border-radius:12px;padding:16px;margin:16px 0;text-align:left;font-size:0.9rem;">
+        <div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="color:#9ba3af;">Submission ID</span><span style="font-weight:800;">{{ sub_id }}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="color:#9ba3af;">Status</span><span style="font-weight:800;color:#f59e0b;">{{ status }}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;"><span style="color:#9ba3af;">Submitted</span><span style="font-weight:800;">{{ submitted_at }}</span></div>
+    </div>
+    <p style="color:#525768;font-size:0.85rem;">Screenshot this page as proof of submission.</p>
+    <a href="/partner" style="color:var(--accent);text-decoration:none;font-weight:800;">Submit another →</a>
+</div>
+
+{% elif error %}
+<div style="background:#2a0f0f;border:1px solid #f87171;border-radius:16px;padding:20px;text-align:center;margin-bottom:20px;">
+    <p style="color:#f87171;font-weight:800;">{{ error }}</p>
+    <a href="/partner" style="color:var(--accent);text-decoration:none;font-weight:800;">Start over →</a>
+</div>
+
+{% else %}
+
+<div id="link-step" class="code-box">
+    <p style="color:#9ba3af;margin:0 0 8px;">Step 1: Link your Discord account</p>
+    <div class="code" id="link-code">------</div>
+    <p style="color:#9ba3af;font-size:0.9rem;">Run this in the MagmaTIERS Discord server:</p>
+    <div style="background:#0b0c10;border-radius:10px;padding:10px 16px;display:inline-block;margin:8px 0;">
+        <code style="color:var(--accent);font-weight:800;font-size:1.1rem;"><span id="cmd-code">/link XXXXXXXX</span></code>
+    </div>
+    <div style="margin-top:16px;color:#9ba3af;font-size:0.9rem;">
+        <span class="spinner" id="link-spinner"></span>
+        <span class="status-dot waiting" id="status-dot"></span>
+        <span id="status-text">Waiting for you to run the command...</span>
+    </div>
+</div>
+
+<form id="partner-form" method="POST" action="/partner" style="display:none;flex-direction:column;gap:16px;">
+    <input type="hidden" name="link_code" id="link-code-input" value="">
+    <div>
+        <label style="color:#9ba3af;font-weight:600;font-size:0.9rem;display:block;margin-bottom:4px;">Discord Account</label>
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 15px;color:#9ba3af;" id="discord-display">Loading...</div>
+    </div>
+    <div>
+        <label style="color:#9ba3af;font-weight:600;font-size:0.9rem;display:block;margin-bottom:4px;">Minecraft IGN *</label>
+        <input name="ign" required placeholder="Your Minecraft username" style="width:100%;">
+    </div>
+    <div>
+        <label style="color:#9ba3af;font-weight:600;font-size:0.9rem;display:block;margin-bottom:4px;">Promotion Type *</label>
+        <select name="type" required style="background:var(--card);border:1px solid var(--border);color:white;padding:8px 15px;border-radius:8px;width:100%;">
+            <option value="">Select...</option>
+            <option value="YouTube">YouTube Channel</option>
+            <option value="Twitch">Twitch Stream</option>
+            <option value="Server">Minecraft Server</option>
+            <option value="Discord">Discord Server</option>
+            <option value="Other">Other</option>
+        </select>
+    </div>
+    <div>
+        <label style="color:#9ba3af;font-weight:600;font-size:0.9rem;display:block;margin-bottom:4px;">Promotion Title *</label>
+        <input name="title" required placeholder="e.g. My Crystal PVP Server" style="width:100%;">
+    </div>
+    <div>
+        <label style="color:#9ba3af;font-weight:600;font-size:0.9rem;display:block;margin-bottom:4px;">Description / Ad Content *</label>
+        <textarea name="description" required placeholder="Describe what you're promoting and why the community should check it out..." style="width:100%;min-height:100px;resize:vertical;background:var(--card);border:1px solid var(--border);color:white;padding:8px 15px;border-radius:8px;outline:none;font-family:inherit;"></textarea>
+    </div>
+    <div>
+        <label style="color:#9ba3af;font-weight:600;font-size:0.9rem;display:block;margin-bottom:4px;">Proof / Link</label>
+        <input name="proof" placeholder="URL to screenshot, video, or social media post" style="width:100%;">
+        <span style="color:#525768;font-size:0.8rem;">Optional — helps staff verify your promotion</span>
+    </div>
+    <button type="submit" style="background:var(--accent);color:white;border:none;padding:12px;border-radius:12px;font-weight:800;font-size:1rem;cursor:pointer;margin-top:4px;">Submit Partner Request</button>
+</form>
+{% endif %}
+</div>
+
+<script>
+(function() {
+    var code = localStorage.getItem('partner_code');
+    var codeEl = document.getElementById('link-code');
+    var cmdEl = document.getElementById('cmd-code');
+    var inputEl = document.getElementById('link-code-input');
+    var statusText = document.getElementById('status-text');
+    var statusDot = document.getElementById('status-dot');
+    var spinner = document.getElementById('link-spinner');
+
+    function showLinked(discordName) {
+        document.getElementById('link-step').style.display = 'none';
+        var form = document.getElementById('partner-form');
+        form.style.display = 'flex';
+        document.getElementById('discord-display').textContent = '✅ ' + (discordName || 'Linked');
+    }
+
+    function checkCode() {
+        if (!code) return;
+        fetch('/api/link/check/' + code)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.claimed) {
+                    if (statusText) {
+                        statusText.textContent = '✅ Linked as ' + (data.discord_name || 'Unknown');
+                        statusDot.className = 'status-dot claimed';
+                        if (spinner) spinner.style.display = 'none';
+                    }
+                    if (inputEl) inputEl.value = code;
+                    setTimeout(function() { showLinked(data.discord_name); }, 800);
+                }
+            })
+            .catch(function() {});
+    }
+
+    if (code) {
+        codeEl.textContent = code;
+        cmdEl.textContent = '/link ' + code;
+        if (inputEl) inputEl.value = code;
+        checkCode();
+        setInterval(checkCode, 2000);
+    } else {
+        fetch('/api/link/generate', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                code = data.code;
+                localStorage.setItem('partner_code', code);
+                codeEl.textContent = code;
+                cmdEl.textContent = '/link ' + code;
+                if (inputEl) inputEl.value = code;
+                checkCode();
+                setInterval(checkCode, 2000);
+            })
+            .catch(function() {
+                statusText.textContent = 'Failed to generate code. Refresh the page.';
+            });
+    }
+})();
+</script>
+{% endblock %}

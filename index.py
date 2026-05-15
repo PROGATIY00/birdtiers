@@ -21,6 +21,7 @@ QUEUE_CHANNEL_ID = 1497963555541225472
 STATUS_CHANNEL_ID = 1497989003721310249
 TESTER_NOTIF_CHANNEL_ID = 1504206348324311131
 CLAIM_CHANNEL_ID = 1504206348324311131
+PARTNER_CHANNEL_ID = 1502975682513473787
 
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
@@ -69,6 +70,8 @@ class DatabaseManager:
             self.console_messages = self.db['console_messages']
             self.queues = self.db['queues']
             self.tester_profiles = self.db['tester_profiles']
+            self.partners = self.db['partners']
+            self.link_codes = self.db['link_codes']
         else:
             self.players = DummyCollection()
             self.settings = DummyCollection()
@@ -76,6 +79,8 @@ class DatabaseManager:
             self.console_messages = DummyCollection()
             self.queues = DummyCollection()
             self.tester_profiles = DummyCollection()
+            self.partners = DummyCollection()
+            self.link_codes = DummyCollection()
 
 db_mgr = DatabaseManager(MONGO_URI)
 
@@ -1121,6 +1126,25 @@ async def resetqueue(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(f"Reset queue for **{user.display_name}** (removed {result.deleted_count} entries).", ephemeral=True)
 
 
+@bot.tree.command(name="link")
+async def link_discord(interaction: discord.Interaction, code: str):
+    """Link your Discord account to the partner page using a code"""
+    code = code.strip().upper()
+    doc = db_mgr.link_codes.find_one({"code": code})
+    if not doc:
+        return await interaction.response.send_message("Invalid or expired code. Generate a new one at /partner.", ephemeral=True)
+    if doc.get("claimed"):
+        return await interaction.response.send_message("This code has already been linked.", ephemeral=True)
+    db_mgr.link_codes.update_one({"_id": doc["_id"]}, {"$set": {
+        "claimed": True, "discord_id": interaction.user.id,
+        "discord_name": str(interaction.user),
+        "claimed_ts": datetime.datetime.utcnow(),
+    }})
+    await interaction.response.send_message(
+        f"✅ Linked! Your Discord account is now connected. Return to the partner page to continue.",
+        ephemeral=True)
+
+
 async def _create_automod_rule(guild_id, name, keyword_filter):
     from discord.http import Route
     route = Route("POST", "/guilds/{guild_id}/auto-moderation/rules", guild_id=guild_id)
@@ -1360,6 +1384,91 @@ def resolve():
     status = "Resolved" if request.form.get('a') == "approve" else "Declined"
     db_mgr.reports.update_one({"_id": ObjectId(request.form.get('id'))}, {"$set": {"status": status}})
     return redirect(url_for('moderation'))
+
+@app.route('/partner', methods=['GET', 'POST'])
+def partner():
+    if is_web_offline():
+        return "Website is offline by admin.", 503
+    if request.method == 'POST':
+        ign = request.form.get('ign', '').strip()
+        link_code = request.form.get('link_code', '').strip().upper()
+        ptype = request.form.get('type', '').strip()
+        title = request.form.get('title', '').strip()
+        description = request.form.get('description', '').strip()
+        proof = request.form.get('proof', '').strip()
+        ip_addr = request.remote_addr or "unknown"
+
+        code_doc = db_mgr.link_codes.find_one({"code": link_code, "claimed": True})
+        if not code_doc:
+            return render_template("partner.html", submitted=False, error="Discord link required. Run /link in Discord first.")
+
+        discord_id = code_doc.get("discord_id")
+        discord_name = code_doc.get("discord_name", "Unknown#0000")
+
+        if not all([ign, ptype, title, description]):
+            return render_template("partner.html", submitted=False, error="Please fill in all required fields.")
+
+        sub = {
+            "ign": ign, "discord_user": discord_name, "discord_id": discord_id,
+            "link_code": link_code, "type": ptype,
+            "title": title, "description": description, "proof": proof or None,
+            "ip": ip_addr, "status": "pending",
+            "ts": datetime.datetime.utcnow(),
+        }
+        result = db_mgr.partners.insert_one(sub)
+        sub_id = str(result.inserted_id)
+
+        try:
+            embed = discord.Embed(title="New Partner Submission", color=0xff4500, timestamp=datetime.datetime.utcnow())
+            embed.add_field(name="IGN", value=ign, inline=True)
+            embed.add_field(name="Discord", value=discord_name, inline=True)
+            embed.add_field(name="Type", value=ptype, inline=True)
+            embed.add_field(name="Title", value=title, inline=False)
+            embed.add_field(name="Description", value=description, inline=False)
+            if proof:
+                embed.add_field(name="Proof", value=proof, inline=False)
+            embed.add_field(name="Submission ID", value=sub_id, inline=True)
+            embed.add_field(name="Status", value="Pending Review", inline=True)
+
+            channel = bot.get_channel(PARTNER_CHANNEL_ID)
+            if channel:
+                import asyncio
+                future = asyncio.run_coroutine_threadsafe(channel.send(embed=embed), bot.loop)
+                msg = future.result(timeout=10)
+                db_mgr.partners.update_one({"_id": result.inserted_id}, {"$set": {"message_id": msg.id, "message_link": f"https://discord.com/channels/{msg.guild.id if msg.guild else 0}/{PARTNER_CHANNEL_ID}/{msg.id}"}})
+        except Exception:
+            pass
+
+        return render_template("partner.html", submitted=True,
+            sub_id=sub_id, status="Pending Review",
+            submitted_at=datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
+
+    return render_template("partner.html", submitted=False)
+
+@app.route('/api/link/generate', methods=['POST'])
+def link_generate():
+    import random, string
+    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    ip = request.remote_addr or "unknown"
+    # Expire old codes for this IP
+    db_mgr.link_codes.update_many({"ip": ip}, {"$set": {"expired": True}})
+    db_mgr.link_codes.insert_one({
+        "code": code, "ip": ip, "claimed": False,
+        "discord_id": None, "discord_name": None,
+        "ts": datetime.datetime.utcnow(),
+    })
+    return jsonify({"code": code})
+
+@app.route('/api/link/check/<code>')
+def link_check(code):
+    code = code.strip().upper()
+    doc = db_mgr.link_codes.find_one({"code": code})
+    if not doc:
+        return jsonify({"claimed": False, "error": "not_found"})
+    if doc.get("claimed"):
+        return jsonify({"claimed": True, "discord_name": doc.get("discord_name", "Unknown")})
+    return jsonify({"claimed": False})
+
 @app.route('/discord')
 def discord_redirect():
     return redirect("https://dsc.gg/magmatiers")
