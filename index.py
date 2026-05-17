@@ -23,6 +23,11 @@ TESTER_NOTIF_CHANNEL_ID = 1504206348324311131
 CLAIM_CHANNEL_ID = 1504206348324311131
 PARTNER_CHANNEL_ID = 1502975682513473787
 PARTNER_CATEGORY_ID = 1498359340065624165
+VERIFY_CHANNEL_ID = 1502966365466656948
+MEMBER_ROLE_ID = int(os.getenv("MEMBER_ROLE_ID")) if os.getenv("MEMBER_ROLE_ID") else None
+UNVERIFIED_ROLE_ID = int(os.getenv("UNVERIFIED_ROLE_ID")) if os.getenv("UNVERIFIED_ROLE_ID") else None
+MEMBER_ROLE_NAME = os.getenv("MEMBER_ROLE_NAME", "Member")
+UNVERIFIED_ROLE_NAME = os.getenv("UNVERIFIED_ROLE_NAME", "Unverified")
 
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
@@ -1251,22 +1256,102 @@ async def resetqueue(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(f"Reset queue for **{user.display_name}** (removed {result.deleted_count} entries).", ephemeral=True)
 
 
+async def _get_ip_geo(ip):
+    if not ip or ip in ("unknown", "127.0.0.1", "::1", "localhost"):
+        return None
+    try:
+        import json, urllib.request
+        loop = asyncio.get_event_loop()
+        resp = await loop.run_in_executor(None, lambda: urllib.request.urlopen(f"http://ip-api.com/json/{ip}", timeout=5))
+        if resp.status == 200:
+            data = json.loads(resp.read())
+            if data.get("status") == "success":
+                return data
+    except:
+        pass
+    return None
+
+
+async def _handle_verify(interaction: discord.Interaction, doc):
+    member = interaction.user
+    guild = interaction.guild
+    ip = doc.get("ip", "unknown")
+
+    member_role = None
+    unverified_role = None
+
+    if MEMBER_ROLE_ID:
+        member_role = guild.get_role(MEMBER_ROLE_ID)
+    if not member_role:
+        member_role = discord.utils.get(guild.roles, name=MEMBER_ROLE_NAME)
+
+    if UNVERIFIED_ROLE_ID:
+        unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
+    if not unverified_role:
+        unverified_role = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
+
+    try:
+        role_changes = []
+        if member_role and member_role not in member.roles:
+            await member.add_roles(member_role, reason="Discord verification")
+            role_changes.append(f"+{member_role.name}")
+        if unverified_role and unverified_role in member.roles:
+            await member.remove_roles(unverified_role, reason="Discord verification")
+            role_changes.append(f"-{unverified_role.name}")
+    except Exception as e:
+        await interaction.response.send_message(f"Failed to update roles: {e}", ephemeral=True)
+        return
+
+    geo = await _get_ip_geo(ip)
+
+    db_mgr.link_codes.update_one({"_id": doc["_id"]}, {"$set": {
+        "claimed": True,
+        "discord_id": interaction.user.id,
+        "discord_name": str(interaction.user),
+        "claimed_ts": datetime.datetime.utcnow(),
+    }})
+
+    channel = bot.get_channel(VERIFY_CHANNEL_ID)
+    if channel:
+        e = discord.Embed(title="New Verification", color=0x34d399, timestamp=datetime.datetime.utcnow())
+        e.add_field(name="User", value=f"{member.mention} ({member})", inline=True)
+        e.add_field(name="ID", value=str(member.id), inline=True)
+        e.add_field(name="Created", value=member.created_at.strftime("%Y-%m-%d %H:%M UTC"), inline=True)
+        e.add_field(name="Joined", value=member.joined_at.strftime("%Y-%m-%d %H:%M UTC") if member.joined_at else "Unknown", inline=True)
+        if geo:
+            e.add_field(name="Country", value=geo.get("country", "?"), inline=True)
+            e.add_field(name="Region", value=geo.get("regionName", "?"), inline=True)
+            e.add_field(name="City", value=geo.get("city", "?"), inline=True)
+            e.add_field(name="ISP", value=geo.get("isp", "?"), inline=True)
+            e.add_field(name="IP", value=ip, inline=True)
+        e.set_footer(text="Verified via web")
+        await channel.send(embed=e)
+
+    await interaction.response.send_message(
+        f"✅ You've been verified, {member.mention}!",
+        ephemeral=True)
+
+
 @bot.tree.command(name="link")
 async def link_discord(interaction: discord.Interaction, code: str):
-    """Link your Discord account to the partner page using a code"""
+    """Link your Discord account using a code"""
     code = code.strip().upper()
     doc = db_mgr.link_codes.find_one({"code": code})
     if not doc:
-        return await interaction.response.send_message("Invalid or expired code. Generate a new one at /partner.", ephemeral=True)
+        return await interaction.response.send_message("Invalid or expired code.", ephemeral=True)
     if doc.get("claimed"):
-        return await interaction.response.send_message("This code has already been linked.", ephemeral=True)
+        return await interaction.response.send_message("This code has already been used.", ephemeral=True)
+
+    if doc.get("type") == "verify":
+        return await _handle_verify(interaction, doc)
+
     db_mgr.link_codes.update_one({"_id": doc["_id"]}, {"$set": {
         "claimed": True, "discord_id": interaction.user.id,
         "discord_name": str(interaction.user),
         "claimed_ts": datetime.datetime.utcnow(),
     }})
     await interaction.response.send_message(
-        f"✅ Linked! Your Discord account is now connected. Return to the partner page to continue.",
+        "✅ Linked! Your Discord account is now connected. Return to the partner page to continue.",
         ephemeral=True)
 
 
@@ -1640,6 +1725,42 @@ def partner_ads():
             "proof": ad.get("proof") or None,
         }
     })
+
+@app.route('/verify')
+def verify_page():
+    import random, string
+    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    ip = request.remote_addr or "unknown"
+    db_mgr.link_codes.update_many({"ip": ip, "type": "verify", "claimed": False}, {"$set": {"expired": True}})
+    db_mgr.link_codes.insert_one({
+        "code": code, "ip": ip, "type": "verify", "claimed": False,
+        "discord_id": None, "discord_name": None,
+        "ts": datetime.datetime.utcnow(),
+    })
+    return render_template("verify.html", code=code)
+
+@app.route('/api/verify/generate', methods=['POST'])
+def verify_generate():
+    import random, string
+    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    ip = request.remote_addr or "unknown"
+    db_mgr.link_codes.update_many({"ip": ip, "type": "verify", "claimed": False}, {"$set": {"expired": True}})
+    db_mgr.link_codes.insert_one({
+        "code": code, "ip": ip, "type": "verify", "claimed": False,
+        "discord_id": None, "discord_name": None,
+        "ts": datetime.datetime.utcnow(),
+    })
+    return jsonify({"code": code})
+
+@app.route('/api/verify/check/<code>')
+def verify_check(code):
+    code = code.strip().upper()
+    doc = db_mgr.link_codes.find_one({"code": code, "type": "verify"})
+    if not doc:
+        return jsonify({"claimed": False, "error": "not_found"})
+    if doc.get("claimed"):
+        return jsonify({"claimed": True, "discord_name": doc.get("discord_name", "Unknown"), "discord_id": doc.get("discord_id")})
+    return jsonify({"claimed": False})
 
 @app.route('/discord')
 def discord_redirect():
