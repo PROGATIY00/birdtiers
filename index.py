@@ -62,8 +62,11 @@ DEFAULT_GAMEMODE_ICON_URL = "https://img.icons8.com/ios-filled/64/ffffff/questio
 class DummyCollection:
     def find(self, *args, **kwargs): return []
     def find_one(self, *args, **kwargs): return None
+    def insert_one(self, *args, **kwargs): return type('obj', (object,), {'inserted_id': None})
+    def insert_many(self, *args, **kwargs): return type('obj', (object,), {'inserted_ids': []})
     def update_one(self, *args, **kwargs): return None
     def update_many(self, *args, **kwargs): return type('obj', (object,), {'modified_count': 0})
+    def distinct(self, *args, **kwargs): return []
 
 class DatabaseManager:
     def __init__(self, uri):
@@ -78,6 +81,7 @@ class DatabaseManager:
             self.tester_profiles = self.db['tester_profiles']
             self.partners = self.db['partners']
             self.link_codes = self.db['link_codes']
+            self.alt_logs = self.db['alt_logs']
         else:
             self.players = DummyCollection()
             self.settings = DummyCollection()
@@ -87,6 +91,7 @@ class DatabaseManager:
             self.tester_profiles = DummyCollection()
             self.partners = DummyCollection()
             self.link_codes = DummyCollection()
+            self.alt_logs = DummyCollection()
 
 db_mgr = DatabaseManager(MONGO_URI)
 
@@ -1272,7 +1277,23 @@ async def _get_ip_geo(ip):
     return None
 
 
+def _log_ip_association(discord_id, ip, username=None, source=None):
+    if not ip or ip in ("unknown", "127.0.0.1", "::1", "localhost"):
+        return
+    db_mgr.alt_logs.update_one(
+        {"discord_id": discord_id, "ip": ip},
+        {"$set": {
+            "discord_id": discord_id, "ip": ip,
+            "username": username,
+            "source": source,
+            "ts": datetime.datetime.utcnow(),
+        }},
+        upsert=True,
+    )
+
+
 async def _handle_verify(interaction: discord.Interaction, doc):
+    await interaction.response.defer(ephemeral=True)
     member = interaction.user
     guild = interaction.guild
     ip = doc.get("ip", "unknown")
@@ -1291,16 +1312,15 @@ async def _handle_verify(interaction: discord.Interaction, doc):
         unverified_role = discord.utils.get(guild.roles, name=UNVERIFIED_ROLE_NAME)
 
     try:
-        role_changes = []
         if member_role and member_role not in member.roles:
             await member.add_roles(member_role, reason="Discord verification")
-            role_changes.append(f"+{member_role.name}")
         if unverified_role and unverified_role in member.roles:
             await member.remove_roles(unverified_role, reason="Discord verification")
-            role_changes.append(f"-{unverified_role.name}")
     except Exception as e:
-        await interaction.response.send_message(f"Failed to update roles: {e}", ephemeral=True)
+        await interaction.followup.send(f"Failed to update roles: {e}", ephemeral=True)
         return
+
+    _log_ip_association(member.id, ip, source="verify")
 
     geo = await _get_ip_geo(ip)
 
@@ -1327,7 +1347,7 @@ async def _handle_verify(interaction: discord.Interaction, doc):
         e.set_footer(text="Verified via web")
         await channel.send(embed=e)
 
-    await interaction.response.send_message(
+    await interaction.followup.send(
         f"✅ You've been verified, {member.mention}!",
         ephemeral=True)
 
@@ -1350,9 +1370,62 @@ async def link_discord(interaction: discord.Interaction, code: str):
         "discord_name": str(interaction.user),
         "claimed_ts": datetime.datetime.utcnow(),
     }})
+    _log_ip_association(interaction.user.id, doc.get("ip", "unknown"), source="partner_link")
     await interaction.response.send_message(
         "✅ Linked! Your Discord account is now connected. Return to the partner page to continue.",
         ephemeral=True)
+
+
+@bot.tree.command(name="alts")
+async def alts(interaction: discord.Interaction, user: discord.Member):
+    """Look up potential alt accounts by shared IP (staff only)"""
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("No permission", ephemeral=True)
+    if is_bot_offline():
+        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
+
+    user_ips = db_mgr.alt_logs.distinct("ip", {"discord_id": user.id})
+    if not user_ips:
+        return await interaction.response.send_message(f"No IP data recorded for {user.mention}.", ephemeral=True)
+
+    alts_raw = list(db_mgr.alt_logs.find({"ip": {"$in": user_ips}, "discord_id": {"$ne": user.id}}))
+    alt_map = {}
+    for entry in alts_raw:
+        did = entry["discord_id"]
+        if did not in alt_map:
+            alt_map[did] = {"ips": set(), "sources": set(), "ts": entry.get("ts")}
+        alt_map[did]["ips"].add(entry["ip"])
+        if entry.get("source"):
+            alt_map[did]["sources"].add(entry["source"])
+        if entry.get("ts") and (not alt_map[did]["ts"] or entry["ts"] > alt_map[did]["ts"]):
+            alt_map[did]["ts"] = entry["ts"]
+
+    if not alt_map:
+        return await interaction.response.send_message(f"No alt accounts found for {user.mention}.", ephemeral=True)
+
+    embed = discord.Embed(
+        title=f"Alt Detection — {user.display_name}",
+        description=f"**{len(alt_map)}** potential alt(s) sharing **{len(user_ips)}** IP(s)",
+        color=0xff4500,
+    )
+
+    total_ips_used = len(user_ips)
+    embed.add_field(name="IPs Used", value="\n".join(user_ips[:10]) + (f"\n+{total_ips_used - 10} more" if total_ips_used > 10 else ""), inline=False)
+
+    for did, data in sorted(alt_map.items(), key=lambda x: x[1]["ts"] or datetime.datetime.min, reverse=True)[:10]:
+        member = interaction.guild.get_member(did)
+        label = f"{member.mention} ({member})" if member else f"<@{did}>"
+        ts_str = data["ts"].strftime("%Y-%m-%d") if isinstance(data["ts"], datetime.datetime) else ""
+        src_str = ", ".join(data["sources"]) if data["sources"] else "unknown"
+        value = f"IPs: {', '.join(list(data['ips'])[:3])}\nSource: {src_str}"
+        if ts_str:
+            value += f"\nLast: {ts_str}"
+        embed.add_field(name=label, value=value, inline=False)
+
+    if len(alt_map) > 10:
+        embed.set_footer(text=f"+ {len(alt_map) - 10} more alts not shown")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def _create_automod_rule(guild_id, name, keyword_filter):
