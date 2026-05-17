@@ -1,7 +1,9 @@
 @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;800&display=swap');
-:root { --bg: #0b0c10; --card: #14171f; --accent: #ff4500; --text: #f0f2f5; --border: #262932; }
-body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; margin-left: 260px; }
+:root { --bg: #0b0c10; --card: #14171f; --accent: #ff4500; --text: #f0f2f5; --border: #262932; --sidebar-w: 260px; --sidebar-collapsed-w: 60px; }
+body { background: var(--bg); color: var(--text); font-family: 'Fredoka', sans-serif; margin: 0; margin-left: var(--sidebar-w); transition: margin-left 0.25s ease; }
 @media (max-width:768px) { body { margin-left:0; } }
+body.sb-collapsed { margin-left: var(--sidebar-collapsed-w); }
+@media (max-width:768px) { body.sb-collapsed { margin-left: 0; } }
 .header { background: #0f1117; padding: 1rem 2rem; border-bottom: 2px solid var(--accent); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; }
 .nav-links { display: flex; gap: 15px; align-items: center; }
 .nav-links a { color: #9ba3af; text-decoration: none; font-weight: 600; font-size: 0.9rem; transition: 0.2s; }
@@ -43,21 +45,23 @@ input { background: var(--card); border: 1px solid var(--border); color: white; 
 .tier-subtext { color: #9ba3af; font-size: 0.75rem; margin-top: 6px; }
 .hamburger { display:none; background:none; border:none; color:var(--text); font-size:1.8rem; cursor:pointer; padding:0 8px; line-height:1; }
 .sidebar-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:999; }
-.sidebar { position:fixed; top:0; left:0; width:260px; height:100%; background:#0f1117; border-right:2px solid var(--border); z-index:1000; overflow-y:auto; padding:20px 0; display:flex; flex-direction:column; }
+.sidebar { position:fixed; top:0; left:0; width:var(--sidebar-w); height:100%; background:#0f1117; border-right:2px solid var(--border); z-index:1000; overflow-y:auto; padding:20px 0; display:flex; flex-direction:column; transition:width 0.25s ease; }
 .sidebar-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:999; }
 .sidebar-overlay.open { display:block; }
-.sidebar a { display:block; color:#9ba3af; text-decoration:none; font-weight:600; font-size:0.95rem; padding:12px 24px; transition:0.2s; border-left:3px solid transparent; }
+.sidebar a { display:block; color:#9ba3af; text-decoration:none; font-weight:600; font-size:0.95rem; padding:12px 24px; transition:0.2s; border-left:3px solid transparent; white-space:nowrap; overflow:hidden; }
 .sidebar a:hover, .sidebar a.active { color:var(--accent); background:rgba(255,69,0,0.06); border-left-color:var(--accent); }
 @media (max-width:768px) {
-    .sidebar { left:-280px; transition:left 0.25s ease; }
+    .sidebar { left:-280px; transition:left 0.25s ease; width:260px; }
     .sidebar.open { left:0; }
     .sidebar-overlay { display:none; }
     .sidebar-overlay.open { display:block; }
 }
-.sidebar .sidebar-logo { padding:12px 24px 20px; font-size:1.3rem; font-weight:800; color:white; border-bottom:1px solid var(--border); margin-bottom:8px; }
+body.sb-collapsed .sidebar { width:var(--sidebar-collapsed-w); }
+@media (max-width:768px) { body.sb-collapsed .sidebar { width:260px; } }
+.sidebar .sidebar-logo { padding:12px 24px 20px; font-size:1.3rem; font-weight:800; color:white; border-bottom:1px solid var(--border); margin-bottom:8px; white-space:nowrap; overflow:hidden; }
 .sidebar .sidebar-logo span { color:var(--accent); }
-.sidebar .s-label { padding:16px 24px 4px; font-size:0.65rem; letter-spacing:0.12em; color:#525768; text-transform:uppercase; font-weight:800; }
-.sb-btn { display:flex; align-items:center; gap:10px; width:calc(100% - 32px); margin:3px 16px; padding:9px 14px; border:none; border-radius:10px; font-weight:700; font-size:0.85rem; cursor:pointer; transition:0.2s; text-decoration:none; }
+.sidebar .s-label { padding:16px 24px 4px; font-size:0.65rem; letter-spacing:0.12em; color:#525768; text-transform:uppercase; font-weight:800; white-space:nowrap; overflow:hidden; }
+.sb-btn { display:flex; align-items:center; gap:10px; width:calc(100% - 32px); margin:3px 16px; padding:9px 14px; border:none; border-radius:10px; font-weight:700; font-size:0.85rem; cursor:pointer; transition:0.2s; text-decoration:none; white-space:nowrap; overflow:hidden; }
 .sb-btn:hover { transform:translateX(3px); }
 .sb-btn.orange { background:var(--accent); color:white; }
 .sb-btn.orange:hover { background:#ff5722; }
@@ -65,6 +69,24 @@ input { background: var(--card); border: 1px solid var(--border); color: white; 
 .sb-btn.blue:hover { background:#4752c4; }
 .sb-btn.dark { background:#1e2230; color:#f0f2f5; }
 .sb-btn.dark:hover { background:#262a3a; }
+
+body.sb-collapsed .sidebar .sb-text,
+body.sb-collapsed .sidebar .s-label,
+body.sb-collapsed .sidebar .sb-btn .sb-label { display:none; }
+body.sb-collapsed .sidebar a { padding:12px 0; text-align:center; border-left-width:0; font-size:0; }
+body.sb-collapsed .sidebar a .sb-icon { font-size:1rem; display:inline; }
+body.sb-collapsed .sb-btn { justify-content:center; width:40px; margin:3px auto; padding:9px 0; gap:0; }
+body.sb-collapsed .sb-btn:hover { transform:none; }
+body.sb-collapsed .sidebar .sidebar-logo { text-align:center; padding:12px 0 20px; font-size:0; }
+body.sb-collapsed .sidebar .sidebar-logo .sb-logo-short { font-size:1.3rem; display:block; }
+body.sb-collapsed .sidebar .sidebar-logo .sb-logo-short span { color:var(--accent); }
+.sb-logo-short { display:none; }
+
+.sb-collapse-btn { display:flex; align-items:center; justify-content:center; background:none; border:none; color:#525768; cursor:pointer; padding:12px 0; font-size:1.1rem; transition:0.2s; width:100%; margin-top:auto; }
+.sb-collapse-btn:hover { color:var(--accent); background:rgba(255,69,0,0.06); }
+body.sb-collapsed .sb-collapse-btn svg { transform:rotate(180deg); }
+@media (max-width:768px) { .sb-collapse-btn { display:none; } }
+
 @media (max-width:768px) { .hamburger { display:block; } .nav-links { display:none !important; } .hide-mobile { display:none !important; }
     .sb-btn { width:calc(100% - 48px); margin:3px 24px; }
 }
