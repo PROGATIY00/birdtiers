@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "magmatiers",
+  "compatibility_date": "2026-05-17",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "templates"
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
+}
