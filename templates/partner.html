@@ -39,6 +39,7 @@
 
 {% else %}
 
+<div id="notifications"></div>
 <div id="link-step" class="code-box">
     <p style="color:#9ba3af;margin:0 0 8px;">Step 1: Link your Discord account</p>
     <div class="code" id="link-code">------</div>
@@ -102,11 +103,32 @@
     var statusDot = document.getElementById('status-dot');
     var spinner = document.getElementById('link-spinner');
 
-    function showLinked(discordName) {
+    function showNotifications(discordId) {
+        fetch('/api/partner/status/' + discordId)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.notifications && data.notifications.length > 0) {
+                    var html = '';
+                    data.notifications.forEach(function(n) {
+                        var color = n.status.indexOf('Approved') !== -1 ? '#34d399' : '#f87171';
+                        var icon = n.status.indexOf('Approved') !== -1 ? '✅' : '❌';
+                        html += '<div style="background:#0f1729;border:1px solid ' + color + ';border-radius:12px;padding:12px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;">'
+                            + '<div><strong style="color:' + color + ';">' + icon + ' ' + n.status + '</strong> — ' + n.title + '</div>'
+                            + '<div style="color:#525768;font-size:0.8rem;">' + n.ts + '</div>'
+                            + '</div>';
+                    });
+                    document.getElementById('notifications').innerHTML = html;
+                }
+            })
+            .catch(function() {});
+    }
+
+    function showLinked(discordName, discordId) {
         document.getElementById('link-step').style.display = 'none';
         var form = document.getElementById('partner-form');
         form.style.display = 'flex';
         document.getElementById('discord-display').textContent = '✅ ' + (discordName || 'Linked');
+        if (discordId) showNotifications(discordId);
     }
 
     function checkCode() {
@@ -121,7 +143,9 @@
                         if (spinner) spinner.style.display = 'none';
                     }
                     if (inputEl) inputEl.value = code;
-                    setTimeout(function() { showLinked(data.discord_name); }, 800);
+                    var did = data.discord_id;
+                    setInterval(function() { if (did) showNotifications(did); }, 30000);
+                    setTimeout(function() { showLinked(data.discord_name, did); }, 800);
                 }
             })
             .catch(function() {});

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Live Queue - MagmaTIERS{% endblock %}
+{% block content %}
+<div class="container" style="max-width:700px;">
+<h1>Live Queue</h1>
+<p style="color:#9ba3af;margin-bottom:20px;">Real-time testing queue status — updates every 30 seconds.</p>
+
+{% if embed and embed.fields %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px;margin-bottom:20px;">
+    <h2 style="margin:0 0 12px;font-size:1.1rem;">{{ embed.title }}</h2>
+    {% for f in embed.fields %}
+    <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+        <span style="color:#9ba3af;font-weight:600;">{{ f.name }}</span>
+        <span style="text-align:right;">{{ f.value.replace('\n', '<br>')|safe }}</span>
+    </div>
+    {% endfor %}
+    {% if embed.footer %}<div style="color:#525768;font-size:0.8rem;margin-top:12px;">{{ embed.footer }}</div>{% endif %}
+</div>
+{% endif %}
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px;">
+    <h2 style="margin:0 0 12px;font-size:1.1rem;">Waiting List ({{ waiting|length }})</h2>
+    {% if waiting %}
+        {% for w in waiting %}
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+            <span><strong>{{ w.username }}</strong> <span style="color:#9ba3af;">— {{ w.gamemode }}</span></span>
+            <span style="color:var(--accent);font-weight:800;">{{ w.region }}</span>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p style="color:#525768;">No one is in the queue right now.</p>
+    {% endif %}
+</div>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px;margin-top:16px;">
+    <h2 style="margin:0 0 12px;font-size:1.1rem;">Online Testers ({{ testers|length }})</h2>
+    {% if testers %}
+        {% for t in testers %}
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);">
+            <span>🟢 {{ t.ign or 'Unknown' }}</span>
+            <span style="color:#9ba3af;">{{ t.gamemodes|join(', ') }} · {{ t.region }}</span>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p style="color:#525768;">No testers online right now.</p>
+    {% endif %}
+</div>
+
+<script>
+setInterval(function() { location.reload(); }, 30000);
+</script>
+</div>
+{% endblock %}

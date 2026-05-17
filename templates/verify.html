@@ -1,0 +1,81 @@
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verify — MagmaTIERS</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; justify-content: center; align-items: center; background: var(--bg); font-family: 'Fredoka', sans-serif; }
+  .verify-card { background: var(--card); border: 1px solid var(--border); border-radius: 24px; padding: 40px; max-width: 480px; width: 90%; text-align: center; }
+  .verify-card h1 { font-size: 1.6rem; margin: 0 0 6px; color: #fff; }
+  .verify-card .sub { color: #9ba3af; font-size: 0.95rem; margin-bottom: 28px; }
+  .code-box { background: #0b0c10; border: 2px dashed var(--accent); border-radius: 16px; padding: 24px; margin: 20px 0; }
+  .code-box .code { font-size: 2.8rem; font-weight: 800; letter-spacing: 6px; color: var(--accent); font-family: monospace; user-select: all; }
+  .code-box .label { color: #525768; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 8px; font-weight: 800; }
+  .steps { text-align: left; margin: 24px 0; }
+  .steps .step { display: flex; align-items: center; gap: 12px; padding: 10px 0; color: #d8dde7; font-size: 0.95rem; }
+  .steps .step .num { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.85rem; flex-shrink: 0; }
+  .steps .step code { background: #0b0c10; color: var(--accent); padding: 3px 10px; border-radius: 6px; font-size: 0.9rem; }
+  .status-msg { margin-top: 20px; padding: 14px; border-radius: 12px; font-weight: 600; }
+  .status-msg.waiting { background: rgba(255,69,0,0.1); border: 1px solid rgba(255,69,0,0.2); color: var(--accent); }
+  .status-msg.success { background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.3); color: #34d399; }
+  .status-msg.error { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: #f87171; }
+  .loader { display: inline-block; width: 18px; height: 18px; border: 2px solid rgba(255,69,0,0.2); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin-right: 8px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .footer-text { margin-top: 24px; color: #525768; font-size: 0.8rem; }
+</style>
+</head><body>
+<div class="verify-card">
+  <h1>Discord Verification</h1>
+  <p class="sub">Link your Discord account to get the Member role</p>
+
+  <div class="code-box">
+    <div class="label">Your Verification Code</div>
+    <div class="code" id="verifyCode">{{ code }}</div>
+  </div>
+
+  <div class="steps">
+    <div class="step"><span class="num">1</span> Open Discord and join the <strong>MagmaTIERS</strong> server</div>
+    <div class="step"><span class="num">2</span> Run this command in any channel:<br><code>/link {{ code }}</code></div>
+    <div class="step"><span class="num">3</span> Wait for confirmation below</div>
+  </div>
+
+  <div class="status-msg waiting" id="statusMsg">
+    <span class="loader"></span>Waiting for you to run <code>/link</code> in Discord...
+  </div>
+
+  <div class="footer-text">This code expires after use or if you reload the page.</div>
+</div>
+
+<script>
+(function() {
+  var code = '{{ code }}';
+  var statusEl = document.getElementById('statusMsg');
+
+  function checkStatus() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/verify/check/' + encodeURIComponent(code), true);
+    xhr.onload = function() {
+      if (xhr.status === 200) {
+        var data = JSON.parse(xhr.responseText);
+        if (data.claimed) {
+          statusEl.className = 'status-msg success';
+          statusEl.innerHTML = '✅ Verified! Your roles have been updated. Welcome!';
+          return;
+        } else if (data.error === 'not_found') {
+          statusEl.className = 'status-msg error';
+          statusEl.innerHTML = '❌ Code expired or invalid. Please <a href="/verify" style="color:var(--accent);">refresh the page</a>.';
+          return;
+        }
+      }
+      setTimeout(checkStatus, 2000);
+    };
+    xhr.onerror = function() {
+      setTimeout(checkStatus, 5000);
+    };
+    xhr.send();
+  }
+
+  setTimeout(checkStatus, 2000);
+})();
+</script>
+</body></html>
