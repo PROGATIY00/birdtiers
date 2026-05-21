@@ -1,3 +1,12 @@
+# --- MOVE ALL IMPORTS TO TOP ---
+import asyncio
+import discord
+from discord import app_commands
+from discord.ext import tasks
+from flask import Flask, render_template, request, redirect, url_for, jsonify
+from pymongo import MongoClient
+from bson.objectid import ObjectId
+
 # --- GAMEMODE ROLE SELECTION ---
 
 # --- GAMEMODE ROLE DROPDOWN ---
@@ -51,13 +60,6 @@ async def gamemoderoles(interaction: discord.Interaction):
         role_mention = f"<@&{role_id}>"
         embed.add_field(name=gm, value=role_mention, inline=True)
     await interaction.response.send_message(embed=embed, view=GamemodeRoleDropdownView(), ephemeral=True)
-import asyncio
-import discord
-from discord import app_commands
-from discord.ext import tasks
-from flask import Flask, render_template, request, redirect, url_for, jsonify
-from pymongo import MongoClient
-from bson.objectid import ObjectId
 import os
 import threading
 import datetime
