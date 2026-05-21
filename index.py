@@ -17,13 +17,13 @@ TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
 TIER_LOG_CHANNEL_ID = 1502966105940164638
-QUEUE_CHANNEL_ID = 1497963555541225472
+QUEUE_CHANNEL_ID = 1507062245366956134
 STATUS_CHANNEL_ID = 1497989003721310249
 TESTER_NOTIF_CHANNEL_ID = 1504206348324311131
 CLAIM_CHANNEL_ID = 1504206348324311131
 PARTNER_CHANNEL_ID = 1502975682513473787
 PARTNER_CATEGORY_ID = 1498359340065624165
-VERIFY_CHANNEL_ID = 1502966365466656948
+VERIFY_CHANNEL_ID = 1507056519810646197
 MEMBER_ROLE_ID = int(os.getenv("MEMBER_ROLE_ID")) if os.getenv("MEMBER_ROLE_ID") else None
 UNVERIFIED_ROLE_ID = int(os.getenv("UNVERIFIED_ROLE_ID")) if os.getenv("UNVERIFIED_ROLE_ID") else None
 MEMBER_ROLE_NAME = os.getenv("MEMBER_ROLE_NAME", "Member")
@@ -1119,27 +1119,23 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
 
 
 @bot.tree.command(name="online")
-async def tester_online(interaction: discord.Interaction, region: str, gamemodes: str = None):
-    """Mark yourself available for testing with your gamemodes and region"""
+async def tester_online(interaction: discord.Interaction, region: str, gamemodes: str):
+    """Set yourself online for specific gamemodes. Example: /online NA Crystal,UHC"""
     region_u = region.upper().strip()
     if region_u not in REGION_COLORS:
-        return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_COLORS.keys())}", ephemeral=True)
+        return await interaction.response.send_message(
+            f"Invalid region. Choose: {', '.join(REGION_COLORS.keys())}",
+            ephemeral=True,
+        )
 
-    existing = db_mgr.tester_profiles.find_one({"discord_id": interaction.user.id})
-    old_modes = set(existing.get("gamemodes", [])) if existing else set()
+    parsed = set(normalize_mode(m.strip()) for m in gamemodes.split(","))
+    parsed = {m for m in parsed if m in MODES}
 
-    if gamemodes:
-        parsed = set(normalize_mode(m.strip()) for m in gamemodes.split(","))
-        parsed = {m for m in parsed if m in MODES}
-    else:
-        parsed = set()
-
-    if not parsed and not old_modes:
-        parsed = set(MODES)  # Default: all modes
-    elif not parsed:
-        parsed = old_modes  # Keep existing
-    else:
-        parsed = old_modes | parsed  # Merge
+    if not parsed:
+        return await interaction.response.send_message(
+            f"No valid gamemodes provided. Choose from: {', '.join(MODES)}",
+            ephemeral=True,
+        )
 
     parsed_list = sorted(parsed)
 
@@ -1168,14 +1164,51 @@ async def tester_online(interaction: discord.Interaction, region: str, gamemodes
     await interaction.response.send_message(embed=embed, ephemeral=True)
     await _refresh_queue_channel(interaction.client)
 
+
 @bot.tree.command(name="offline")
-async def tester_offline(interaction: discord.Interaction):
-    """Mark yourself as unavailable for testing"""
-    db_mgr.tester_profiles.update_one(
-        {"discord_id": interaction.user.id},
-        {"$set": {"online": False, "ts": datetime.datetime.utcnow()}},
-    )
-    await interaction.response.send_message("You're now **offline** for testing.", ephemeral=True)
+async def tester_offline(interaction: discord.Interaction, gamemodes: str):
+    """Go offline in specific gamemodes or all. Example: /offline Crystal,UHC"""
+    existing = db_mgr.tester_profiles.find_one({"discord_id": interaction.user.id})
+    if not existing:
+        return await interaction.response.send_message("You're not in the tester list.", ephemeral=True)
+
+    lowered = gamemodes.strip().lower()
+    if lowered == "all":
+        db_mgr.tester_profiles.update_one(
+            {"discord_id": interaction.user.id},
+            {"$set": {"online": False, "ts": datetime.datetime.utcnow()}},
+        )
+        await interaction.response.send_message("You're now **offline** for all gamemodes.", ephemeral=True)
+        await _refresh_queue_channel(interaction.client)
+        return
+
+    parsed = set(normalize_mode(m.strip()) for m in gamemodes.split(","))
+    parsed = {m for m in parsed if m in MODES}
+
+    if not parsed:
+        return await interaction.response.send_message(
+            f"No valid gamemodes provided. Use /offline all or choose from: {', '.join(MODES)}",
+            ephemeral=True,
+        )
+
+    current = set(existing.get("gamemodes", []))
+    updated = sorted(current - parsed)
+
+    if not updated:
+        db_mgr.tester_profiles.update_one(
+            {"discord_id": interaction.user.id},
+            {"$set": {"online": False, "gamemodes": [], "ts": datetime.datetime.utcnow()}},
+        )
+        await interaction.response.send_message("All gamemodes removed. You're now **offline**.", ephemeral=True)
+    else:
+        db_mgr.tester_profiles.update_one(
+            {"discord_id": interaction.user.id},
+            {"$set": {"gamemodes": updated, "ts": datetime.datetime.utcnow()}},
+        )
+        await interaction.response.send_message(
+            f"Went **offline** in: {', '.join(sorted(parsed))}\nStill testing: {', '.join(updated)}",
+            ephemeral=True)
+
     await _refresh_queue_channel(interaction.client)
 
 
