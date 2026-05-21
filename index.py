@@ -7,59 +7,8 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 
-# --- GAMEMODE ROLE SELECTION ---
 
-# --- GAMEMODE ROLE DROPDOWN ---
-class GamemodeRoleDropdown(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label=gm, value=gm, description=f"Toggle {gm} role", emoji=None)
-            for gm in GAMEMODE_ROLE_IDS.keys()
-        ]
-        super().__init__(placeholder="Select gamemode roles...", min_values=1, max_values=len(options), options=options, custom_id="gmrole_dropdown")
-
-    async def callback(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        if not guild:
-            await interaction.response.send_message("Guild not found.", ephemeral=True)
-            return
-        added = []
-        removed = []
-        for gm in self.values:
-            role_id = GAMEMODE_ROLE_IDS.get(gm)
-            if not role_id:
-                continue
-            role = guild.get_role(role_id)
-            if not role:
-                continue
-            if role in interaction.user.roles:
-                await interaction.user.remove_roles(role, reason="Removed gamemode role")
-                removed.append(gm)
-            else:
-                await interaction.user.add_roles(role, reason="Added gamemode role")
-                added.append(gm)
-        msg = ""
-        if added:
-            msg += f"Added: {', '.join(added)}\n"
-        if removed:
-            msg += f"Removed: {', '.join(removed)}"
-        if not msg:
-            msg = "No changes."
-        await interaction.response.send_message(msg, ephemeral=True)
-
-class GamemodeRoleDropdownView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(GamemodeRoleDropdown())
-
-@bot.tree.command(name="gamemoderoles", description="Select your gamemode roles!")
-async def gamemoderoles(interaction: discord.Interaction):
-    """Send a message with all gamemodes to select roles."""
-    embed = discord.Embed(title="Select Your Gamemode Roles", description="Choose one or more gamemodes from the dropdown to add/remove roles.", color=0x5865F2)
-    for gm, role_id in GAMEMODE_ROLE_IDS.items():
-        role_mention = f"<@&{role_id}>"
-        embed.add_field(name=gm, value=role_mention, inline=True)
-    await interaction.response.send_message(embed=embed, view=GamemodeRoleDropdownView(), ephemeral=True)
+# --- Place after bot is defined ---
 import os
 import threading
 import datetime
@@ -467,6 +416,58 @@ class MagmaBot(discord.Client):
         refresh_queue_status.start()
 
 bot = MagmaBot()
+
+# --- GAMEMODE ROLE SELECTION ---
+class GamemodeRoleDropdown(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=gm, value=gm, description=f"Toggle {gm} role", emoji=None)
+            for gm in GAMEMODE_ROLE_IDS.keys()
+        ]
+        super().__init__(placeholder="Select gamemode roles...", min_values=1, max_values=len(options), options=options, custom_id="gmrole_dropdown")
+
+    async def callback(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message("Guild not found.", ephemeral=True)
+            return
+        added = []
+        removed = []
+        for gm in self.values:
+            role_id = GAMEMODE_ROLE_IDS.get(gm)
+            if not role_id:
+                continue
+            role = guild.get_role(role_id)
+            if not role:
+                continue
+            if role in interaction.user.roles:
+                await interaction.user.remove_roles(role, reason="Removed gamemode role")
+                removed.append(gm)
+            else:
+                await interaction.user.add_roles(role, reason="Added gamemode role")
+                added.append(gm)
+        msg = ""
+        if added:
+            msg += f"Added: {', '.join(added)}\n"
+        if removed:
+            msg += f"Removed: {', '.join(removed)}"
+        if not msg:
+            msg = "No changes."
+        await interaction.response.send_message(msg, ephemeral=True)
+
+class GamemodeRoleDropdownView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(GamemodeRoleDropdown())
+
+@bot.tree.command(name="gamemoderoles", description="Select your gamemode roles!")
+async def gamemoderoles(interaction: discord.Interaction):
+    """Send a message with all gamemodes to select roles."""
+    embed = discord.Embed(title="Select Your Gamemode Roles", description="Choose one or more gamemodes from the dropdown to add/remove roles.", color=0x5865F2)
+    for gm, role_id in GAMEMODE_ROLE_IDS.items():
+        role_mention = f"<@&{role_id}>"
+        embed.add_field(name=gm, value=role_mention, inline=True)
+    await interaction.response.send_message(embed=embed, view=GamemodeRoleDropdownView(), ephemeral=True)
 
 @tasks.loop(seconds=30)
 async def refresh_queue_status():
