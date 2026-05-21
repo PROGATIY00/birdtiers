@@ -1,3 +1,56 @@
+# --- GAMEMODE ROLE SELECTION ---
+
+# --- GAMEMODE ROLE DROPDOWN ---
+class GamemodeRoleDropdown(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=gm, value=gm, description=f"Toggle {gm} role", emoji=None)
+            for gm in GAMEMODE_ROLE_IDS.keys()
+        ]
+        super().__init__(placeholder="Select gamemode roles...", min_values=1, max_values=len(options), options=options, custom_id="gmrole_dropdown")
+
+    async def callback(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message("Guild not found.", ephemeral=True)
+            return
+        added = []
+        removed = []
+        for gm in self.values:
+            role_id = GAMEMODE_ROLE_IDS.get(gm)
+            if not role_id:
+                continue
+            role = guild.get_role(role_id)
+            if not role:
+                continue
+            if role in interaction.user.roles:
+                await interaction.user.remove_roles(role, reason="Removed gamemode role")
+                removed.append(gm)
+            else:
+                await interaction.user.add_roles(role, reason="Added gamemode role")
+                added.append(gm)
+        msg = ""
+        if added:
+            msg += f"Added: {', '.join(added)}\n"
+        if removed:
+            msg += f"Removed: {', '.join(removed)}"
+        if not msg:
+            msg = "No changes."
+        await interaction.response.send_message(msg, ephemeral=True)
+
+class GamemodeRoleDropdownView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(GamemodeRoleDropdown())
+
+@bot.tree.command(name="gamemoderoles", description="Select your gamemode roles!")
+async def gamemoderoles(interaction: discord.Interaction):
+    """Send a message with all gamemodes to select roles."""
+    embed = discord.Embed(title="Select Your Gamemode Roles", description="Choose one or more gamemodes from the dropdown to add/remove roles.", color=0x5865F2)
+    for gm, role_id in GAMEMODE_ROLE_IDS.items():
+        role_mention = f"<@&{role_id}>"
+        embed.add_field(name=gm, value=role_mention, inline=True)
+    await interaction.response.send_message(embed=embed, view=GamemodeRoleDropdownView(), ephemeral=True)
 import asyncio
 import discord
 from discord import app_commands
@@ -12,7 +65,6 @@ import subprocess
 import shutil
 
 
-# --- CONFIGURATION ---
 TOKEN = os.getenv("TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) if os.getenv("LOG_CHANNEL_ID") else None
@@ -28,6 +80,47 @@ MEMBER_ROLE_ID = int(os.getenv("MEMBER_ROLE_ID")) if os.getenv("MEMBER_ROLE_ID")
 UNVERIFIED_ROLE_ID = int(os.getenv("UNVERIFIED_ROLE_ID")) if os.getenv("UNVERIFIED_ROLE_ID") else None
 MEMBER_ROLE_NAME = os.getenv("MEMBER_ROLE_NAME", "Member")
 UNVERIFIED_ROLE_NAME = os.getenv("UNVERIFIED_ROLE_NAME", "Unverified")
+
+# --- REGION ROLE IDS ---
+REGION_ROLE_IDS = {
+    "EU": 1499373016445096096,
+    "NA": 1499373055934206033,
+    "AF": 1499117778207248535,
+    "AS": 1507060208927772692,
+    "OC": 1499373068504666183,
+}
+
+# --- GAMEMODE ROLE IDS ---
+GAMEMODE_ROLE_IDS = {
+    "Sword": 1507060831093788823,
+    "Axe": 1507060845790888016,
+    "Crystal": 1507060847980187775,
+    "Neth Pot": 1507060885238190111,
+    # "Mace": <ADD_MACE_ROLE_ID_HERE>,
+}
+
+# --- GAMEMODE/REGION CHANNEL IDS (example, fill in actual IDs as needed) ---
+GAMEMODE_REGION_CHANNEL_IDS = {
+    ("Sword", "EU"): 1507059703920722081,  # e.g. 123456789012345678
+    ("Sword", "NA"): 1507059703920722081,
+    ("Sword", "AS"): 1507059703920722081,
+    ("Sword", "AF"): 1507059703920722081,
+    ("Sword", "OC"): 1507059703920722081,
+    ("Axe", "EU"): 1507059703920722081,
+    ("Axe", "NA"): 1507059703920722081,
+    ("Axe", "AS"): 1507059703920722081,
+    ("Axe", "AF"): 1507059703920722081,
+    ("Crystal", "EU"): 1507059703920722081,
+    ("Crystal", "NA"): 1507059703920722081,
+    # ADD ASIA AFRICA OCEANIA CHANNELS AND OTHER GAMEMODES AS NEEDED
+    ("Mace", "EU"): 1507059703920722081,
+    ("Mace", "NA"): 1507059703920722081,
+    ("Mace", "AS"): 1507059703920722081,
+    ("Mace", "AF"): 1507059703920722081,
+    ("Mace", "OC"): 1507059703920722081,
+
+    # Add all combos as needed
+}
 
 
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
@@ -253,15 +346,7 @@ async def log_action(action: str, details: str, interaction: discord.Interaction
     except Exception as e:
         print(f"[log_action] Failed to send tier log: {e}")
 
-    # Public channel (LOG_CHANNEL_ID) — only when requested
-    if public and LOG_CHANNEL_ID and LOG_CHANNEL_ID != TIER_LOG_CHANNEL_ID:
-        pub_channel = bot.get_channel(LOG_CHANNEL_ID)
-        pub_msg = f"{prefix}{details_s}"
-        try:
-            if pub_channel:
-                await pub_channel.send(pub_msg)
-        except Exception as e:
-            print(f"[log_action] Failed to send public log: {e}")
+    # (Removed) Public channel (LOG_CHANNEL_ID) — now testers are responsible for sending to log channel.
 
     # Push to web console
     push_console_log(
@@ -906,6 +991,16 @@ def _update_status_channel():
     if closed_modes:
         embed.add_field(name="Closed", value=", ".join(closed_modes), inline=True)
     embed.add_field(name="Waiting List", value="\n".join(lines), inline=True)
+
+    # Service status
+    status_doc = db_mgr.settings.find_one({"_id": "offline_mode"})
+    service_status = status_doc.get("services", {}) if status_doc else {}
+    status_lines = []
+    for service in ["web", "bot", "database", "partner"]:
+        state = service_status.get(service, False)
+        status_lines.append(f"{service.title()}: {'❌ Down' if state else '✅ Up'}")
+    embed.add_field(name="Service Status", value="\n".join(status_lines), inline=False)
+
     embed.set_footer(text=f"Updated just now")
     return embed
 
@@ -929,28 +1024,68 @@ async def _send_or_edit_status():
 class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
     def __init__(self):
         super().__init__()
-        self.add_item(discord.ui.TextInput(label="IGN", placeholder="Your Minecraft username", required=True, max_length=30))
-        self.add_item(discord.ui.TextInput(label="Gamemode", placeholder="e.g. Crystal, UHC, Pot", required=True, max_length=20))
-        self.add_item(discord.ui.TextInput(label="Region", placeholder="NA, EU, AS, SA, OC, AF", required=True, max_length=5))
-        self.add_item(discord.ui.TextInput(label="Recommended Server", placeholder="e.g. 0.0.0.0:25565", required=True, max_length=100))
+        self.ign_input = discord.ui.TextInput(label="IGN", placeholder="Your Minecraft username", required=False, max_length=30)
+        self.gamemode_input = discord.ui.TextInput(label="Gamemode", placeholder="e.g. Crystal, UHC, Pot", required=True, max_length=20)
+        self.region_input = discord.ui.TextInput(label="Region", placeholder="NA, EU, AS, SA, OC, AF", required=True, max_length=5)
+        self.server_input = discord.ui.TextInput(label="Recommended Server", placeholder="e.g. 0.0.0.0:25565", required=True, max_length=100)
+        self.add_item(self.ign_input)
+        self.add_item(self.gamemode_input)
+        self.add_item(self.region_input)
+        self.add_item(self.server_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        ign = self.children[0].value.strip()
-        gamemode = self.children[1].value.strip()
-        region = self.children[2].value.strip().upper()
-        server = self.children[3].value.strip()
+        gamemode = self.gamemode_input.value.strip()
+        region = self.region_input.value.strip().upper()
+        server = self.server_input.value.strip()
 
         n_mode = normalize_mode(gamemode)
         if n_mode not in MODES:
             return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
-        if region not in REGION_COLORS:
-            return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_COLORS.keys())}", ephemeral=True)
+        if region not in REGION_ROLE_IDS:
+            return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_ROLE_IDS.keys())}", ephemeral=True)
         if _is_gamemode_closed(n_mode):
             return await interaction.response.send_message(f"**{n_mode}** is currently closed in the queue.", ephemeral=True)
 
         cooldown = _check_queue_cooldown(interaction.user.id)
         if cooldown:
             return await interaction.response.send_message(f"You're already in queue for {cooldown}", ephemeral=True)
+
+        # Only ask for IGN if not tested before
+        ign = self.ign_input.value.strip()
+        player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id, "gamemode": n_mode})
+        if not ign and player_doc:
+            ign = player_doc.get("username", "")
+        if not ign:
+            return await interaction.response.send_message("IGN required (not found in your previous records)", ephemeral=True)
+
+        # Block banned IGNs
+        banned_doc = db_mgr.players.find_one({"username": ign, "banned": True})
+        if banned_doc:
+            return await interaction.response.send_message("This IGN is banned from queuing.", ephemeral=True)
+
+        # Assign region role to user
+        region_role_id = REGION_ROLE_IDS.get(region)
+        if region_role_id:
+            guild = interaction.guild
+            if guild:
+                region_role = guild.get_role(region_role_id)
+                if region_role and region_role not in interaction.user.roles:
+                    try:
+                        await interaction.user.add_roles(region_role, reason="Queued for region")
+                    except Exception:
+                        pass
+
+        # Assign gamemode role to user (optional, if desired)
+        gamemode_role_id = GAMEMODE_ROLE_IDS.get(n_mode)
+        if gamemode_role_id:
+            guild = interaction.guild
+            if guild:
+                gm_role = guild.get_role(gamemode_role_id)
+                if gm_role and gm_role not in interaction.user.roles:
+                    try:
+                        await interaction.user.add_roles(gm_role, reason="Queued for gamemode")
+                    except Exception:
+                        pass
 
         entry = {
             "username": ign, "discord_id": interaction.user.id,
@@ -962,11 +1097,15 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
         queue_id = db_mgr.queues.insert_one(entry).inserted_id
 
         # Send queue entry with buttons to claim channel
-        claim_channel = interaction.client.get_channel(CLAIM_CHANNEL_ID)
+        # Use gamemode/region channel if set, else fallback
+        channel_id = GAMEMODE_REGION_CHANNEL_IDS.get((n_mode, region)) or CLAIM_CHANNEL_ID
+        claim_channel = interaction.client.get_channel(channel_id)
         if claim_channel:
             entry_embed = _build_entry_embed(n_mode, ign, region, interaction.user.mention, server=server)
             view = QueueView(status="waiting")
-            msg = await claim_channel.send(embed=entry_embed, view=view)
+            # Ping gamemode role in the message to testers
+            ping_str = f"<@&{gamemode_role_id}>" if gamemode_role_id else ""
+            msg = await claim_channel.send(content=ping_str, embed=entry_embed, view=view)
             db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
 
         await _refresh_queue_channel(interaction.client)
@@ -1077,21 +1216,50 @@ async def partner_cmd(interaction: discord.Interaction, action: str, submission_
 
 @bot.tree.command(name="queue")
 async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str, region: str):
-    """Queue a player for testing"""
+    """Queue a player for testing (uses roles for region/gamemode)"""
     if is_bot_offline():
         return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
     n_mode = normalize_mode(gamemode)
     if n_mode not in MODES:
         return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
     region_u = region.upper().strip()
-    if region_u not in REGION_COLORS:
-        return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_COLORS.keys())}", ephemeral=True)
+    if region_u not in REGION_ROLE_IDS:
+        return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_ROLE_IDS.keys())}", ephemeral=True)
     if _is_gamemode_closed(n_mode):
         return await interaction.response.send_message(f"**{n_mode}** is currently closed in the queue.", ephemeral=True)
 
     cooldown = _check_queue_cooldown(interaction.user.id)
     if cooldown:
         return await interaction.response.send_message(f"You're already in queue for {cooldown}", ephemeral=True)
+
+    # Block banned IGNs
+    banned_doc = db_mgr.players.find_one({"username": player, "banned": True})
+    if banned_doc:
+        return await interaction.response.send_message("This IGN is banned from queuing.", ephemeral=True)
+
+    # Assign region role to user
+    region_role_id = REGION_ROLE_IDS.get(region_u)
+    if region_role_id:
+        guild = interaction.guild
+        if guild:
+            region_role = guild.get_role(region_role_id)
+            if region_role and region_role not in interaction.user.roles:
+                try:
+                    await interaction.user.add_roles(region_role, reason="Queued for region")
+                except Exception:
+                    pass
+
+    # Assign gamemode role to user (optional)
+    gamemode_role_id = GAMEMODE_ROLE_IDS.get(n_mode)
+    if gamemode_role_id:
+        guild = interaction.guild
+        if guild:
+            gm_role = guild.get_role(gamemode_role_id)
+            if gm_role and gm_role not in interaction.user.roles:
+                try:
+                    await interaction.user.add_roles(gm_role, reason="Queued for gamemode")
+                except Exception:
+                    pass
 
     entry = {
         "username": player, "discord_id": interaction.user.id,
@@ -1103,11 +1271,13 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
     queue_id = db_mgr.queues.insert_one(entry).inserted_id
 
     # Send queue entry with buttons to claim channel
-    claim_channel = bot.get_channel(CLAIM_CHANNEL_ID)
+    channel_id = GAMEMODE_REGION_CHANNEL_IDS.get((n_mode, region_u)) or CLAIM_CHANNEL_ID
+    claim_channel = bot.get_channel(channel_id)
     if claim_channel:
         entry_embed = _build_entry_embed(n_mode, player, region_u, interaction.user.mention)
         view = QueueView(status="waiting")
-        msg = await claim_channel.send(embed=entry_embed, view=view)
+        ping_str = f"<@&{gamemode_role_id}>" if gamemode_role_id else ""
+        msg = await claim_channel.send(content=ping_str, embed=entry_embed, view=view)
         db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
 
     await _refresh_queue_channel(bot)
