@@ -1024,6 +1024,7 @@ async def _send_or_edit_status():
     db_mgr.settings.update_one({"_id": "status_msg_id"}, {"$set": {"message_id": msg.id}}, upsert=True)
 
 
+
 class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
     def __init__(self):
         super().__init__()
@@ -1035,6 +1036,11 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
         self.add_item(self.gamemode_input)
         self.add_item(self.region_input)
         self.add_item(self.server_input)
+
+    @property
+    def selected_gamemode(self):
+        # Helper to get the selected gamemode (for dropdown pre-fill)
+        return self.gamemode_input.default or self.gamemode_input.value
 
     async def on_submit(self, interaction: discord.Interaction):
         gamemode = self.gamemode_input.value.strip()
@@ -1119,13 +1125,54 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
         await interaction.response.send_message(f"You've been queued for **{n_mode}** ({region})!", ephemeral=True)
 
 
+
+# --- GAMEMODE DROPDOWN FOR QUEUE ---
+class QueueGamemodeDropdown(discord.ui.Select):
+    def __init__(self, closed_modes=None):
+        closed_modes = closed_modes or []
+        options = [
+            discord.SelectOption(
+                label=mode,
+                value=mode,
+                description=("Closed" if mode in closed_modes else None),
+                default=False,
+                emoji=None,
+                ) for mode in MODES
+        ]
+        super().__init__(
+            placeholder="Select gamemode...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="queue_gamemode_dropdown"
+        )
+        self.closed_modes = closed_modes
+
+    async def callback(self, interaction: discord.Interaction):
+        selected_mode = self.values[0]
+        if selected_mode in self.closed_modes:
+            await interaction.response.send_message(f"**{selected_mode}** is currently closed in the queue.", ephemeral=True)
+            return
+        # Open the modal with the selected gamemode pre-filled
+        modal = JoinQueueModal()
+        modal.gamemode_input.default = selected_mode
+        await interaction.response.send_modal(modal)
+
+
 class JoinQueueView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
-
-    @discord.ui.button(label="Join Queue", style=discord.ButtonStyle.primary, custom_id="join_queue")
-    async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(JoinQueueModal())
+        # Get closed gamemodes from DB
+        closed_doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
+        closed_modes = closed_doc.get("modes", []) if closed_doc else []
+        self.add_item(QueueGamemodeDropdown(closed_modes=closed_modes))
+        # Add a disabled join button for visual clarity (not used for action)
+        self.add_item(discord.ui.Button(
+            label="Join Queue",
+            style=discord.ButtonStyle.primary,
+            custom_id="join_queue_disabled",
+            disabled=True
+        ))
 
 
 class PartnerView(discord.ui.View):
@@ -1217,6 +1264,7 @@ async def partner_cmd(interaction: discord.Interaction, action: str, submission_
     await interaction.response.send_message(f"Submission **{submission_id}** → {new_status}", ephemeral=True)
 
 
+
 @bot.tree.command(name="queue")
 async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str, region: str):
     """Queue a player for testing (uses roles for region/gamemode)"""
@@ -1278,7 +1326,10 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
     claim_channel = bot.get_channel(channel_id)
     if claim_channel:
         entry_embed = _build_entry_embed(n_mode, player, region_u, interaction.user.mention)
-        view = QueueView(status="waiting")
+        # Disable claim button if gamemode is closed
+        closed_doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
+        closed_modes = closed_doc.get("modes", []) if closed_doc else []
+        view = QueueView(status="waiting" if n_mode not in closed_modes else "closed")
         ping_str = f"<@&{gamemode_role_id}>" if gamemode_role_id else ""
         msg = await claim_channel.send(content=ping_str, embed=entry_embed, view=view)
         db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
