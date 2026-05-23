@@ -1175,10 +1175,10 @@ class VerifyIGNView(discord.ui.View):
 
 
 class EnterQueueModal(discord.ui.Modal, title="Join Queue"):
-    def __init__(self, gamemode, detected_region, ign_default=""):
+    def __init__(self, gamemode, region, ign_default=""):
         super().__init__()
         self.gamemode = gamemode
-        self.detected_region = detected_region
+        self.region = region
 
         self.ign_input = discord.ui.TextInput(
             label="In-Game Name",
@@ -1189,30 +1189,39 @@ class EnterQueueModal(discord.ui.Modal, title="Join Queue"):
         )
         self.add_item(self.ign_input)
 
-        region_options = [
-            discord.SelectOption(label=rc, value=rc, default=(rc == detected_region))
-            for rc in REGION_ROLE_IDS.keys()
-        ]
-        self.region_select = discord.ui.Select(
-            placeholder="Select your region",
-            options=region_options,
-            custom_id="modal_region_select",
-        )
-        self.add_item(self.region_select)
-
     async def on_submit(self, interaction: discord.Interaction):
-        region = self.region_select.values[0] if self.region_select.values else self.detected_region
         ign = self.ign_input.value.strip()
 
-        rdata = tier_queue.regions.get(region)
+        rdata = tier_queue.regions.get(self.region)
         if not rdata or not rdata["open"]:
-            return await interaction.response.send_message(f"The {region} queue is not currently open.", ephemeral=True)
+            return await interaction.response.send_message(f"The {self.region} queue is not currently open.", ephemeral=True)
 
-        result = tier_queue.add_user(region, interaction.user.id, ign=ign, gamemode=self.gamemode)
+        result = tier_queue.add_user(self.region, interaction.user.id, ign=ign, gamemode=self.gamemode)
         await interaction.response.send_message(result, ephemeral=True)
 
         await _update_gamemode_queue_embed(self.gamemode)
-        await _update_region_queue_embed(region)
+        await _update_region_queue_embed(self.region)
+
+
+class RegionSelectView(discord.ui.View):
+    def __init__(self, gamemode, detected_region, ign_default):
+        super().__init__(timeout=120)
+        self.gamemode = gamemode
+        self.detected_region = detected_region
+        self.ign_default = ign_default
+
+    @discord.ui.select(
+        placeholder="Select your region...",
+        options=[discord.SelectOption(label=rc, value=rc) for rc in REGION_ROLE_IDS.keys()],
+        custom_id="region_select_queue",
+    )
+    async def select_region(self, interaction: discord.Interaction, select: discord.ui.Select):
+        region = select.values[0]
+        await interaction.response.send_modal(EnterQueueModal(self.gamemode, region, ign_default=self.ign_default))
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="region_select_cancel")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Cancelled.", view=None)
 
 
 # Reverse lookup: channel_id -> gamemode
@@ -1241,7 +1250,8 @@ class EnterQueueView(discord.ui.View):
 
         player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id})
         ign_default = player_doc.get("username", "") if player_doc else ""
-        await interaction.response.send_modal(EnterQueueModal(gamemode, detected_region or "NA", ign_default=ign_default))
+        view = RegionSelectView(gamemode, detected_region or "NA", ign_default=ign_default)
+        await interaction.response.send_message("Select your region:", view=view, ephemeral=True)
 
     @discord.ui.button(label="Exit Queue", style=discord.ButtonStyle.danger, custom_id="exit_queue")
     async def exit_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
