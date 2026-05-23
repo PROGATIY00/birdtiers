@@ -27,6 +27,7 @@ CLAIM_CHANNEL_ID = 1504206348324311131
 PARTNER_CHANNEL_ID = 1502975682513473787
 PARTNER_CATEGORY_ID = 1498359340065624165
 VERIFY_CHANNEL_ID = 1502966365466656948
+VERIFY_IGN_CHANNEL_ID = 1507804249554292826
 MEMBER_ROLE_ID = int(os.getenv("MEMBER_ROLE_ID")) if os.getenv("MEMBER_ROLE_ID") else None
 UNVERIFIED_ROLE_ID = int(os.getenv("UNVERIFIED_ROLE_ID")) if os.getenv("UNVERIFIED_ROLE_ID") else None
 MEMBER_ROLE_NAME = os.getenv("MEMBER_ROLE_NAME", "Member")
@@ -164,12 +165,31 @@ class TierlistQueue:
         return embed
 
     def make_gamemode_embed(self, gamemode):
-        embed = discord.Embed(title=f"{gamemode} Queue", description="Click Enter to join the queue for this gamemode.", color=0x5865F2)
-        region_counts = []
+        total_waiting = 0
+        total_testers = 0
+        region_lines = []
         for rcode, rdata in self.regions.items():
             count = sum(1 for e in rdata["queue"] if e["gamemode"] == gamemode or not e["gamemode"])
-            region_counts.append(f"{rcode}: {count}")
-        embed.add_field(name="Queue by Region", value="\n".join(region_counts) or "None", inline=False)
+            testers = len(rdata["testers"])
+            region_lines.append(f"{rcode}: {count} waiting, {testers} testing")
+            total_waiting += count
+            total_testers += testers
+
+        if total_testers > 0 and total_waiting > 0:
+            est_min = max(5, (total_waiting // total_testers) * 12)
+            eta = f"~{est_min} min"
+        elif total_waiting > 0:
+            eta = "Waiting for testers..."
+        else:
+            eta = "No queue"
+
+        embed = discord.Embed(
+            title=f"{gamemode} Queue",
+            description=f"**Est. Wait: {eta}**\nClick Enter to join the queue.",
+            color=0x5865F2,
+        )
+        embed.add_field(name="Queue by Region", value="\n".join(region_lines) or "None", inline=False)
+        embed.set_footer(text=f"{total_waiting} total waiting · {total_testers} testers online")
         return embed
 
     def format_no_queue(self):
@@ -542,6 +562,7 @@ class MagmaBot(discord.Client):
             except Exception:
                 pass
         self.add_view(EnterQueueView())
+        self.add_view(VerifyIGNView())
         refresh_queue_status.start()
         refresh_region_queues.start()
 
@@ -572,6 +593,18 @@ class MagmaBot(discord.Client):
             view = EnterQueueView()
             msg = await channel.send(embed=embed, view=view)
             gdata["message_id"] = msg.id
+        # Send IGN verification embed
+        verify_chan = self.get_channel(VERIFY_IGN_CHANNEL_ID)
+        if verify_chan:
+            async for msg in verify_chan.history(limit=5):
+                if msg.author == self.user:
+                    await msg.delete()
+            verify_embed = discord.Embed(
+                title="Verify Your Minecraft IGN",
+                description="Click the button below to link your Minecraft IGN to your Discord account. This saves your IGN so you don't have to re-enter it every time you queue.",
+                color=0x5865F2,
+            )
+            await verify_chan.send(embed=verify_embed, view=VerifyIGNView())
 
 bot = MagmaBot()
 
@@ -1104,6 +1137,43 @@ class QueueView(discord.ui.View):
         await interaction.response.send_message(embed=e, ephemeral=True)
 
 
+class VerifyIGNModal(discord.ui.Modal, title="Verify Your IGN"):
+    def __init__(self):
+        super().__init__()
+        self.ign_input = discord.ui.TextInput(
+            label="Minecraft IGN",
+            placeholder="Enter your Minecraft username",
+            required=True,
+            max_length=16,
+        )
+        self.add_item(self.ign_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ign = self.ign_input.value.strip()
+        db_mgr.players.update_one(
+            {"discord_id": interaction.user.id},
+            {"$set": {
+                "username": ign,
+                "discord_id": interaction.user.id,
+                "ts": datetime.datetime.utcnow(),
+            }},
+            upsert=True,
+        )
+        embed = discord.Embed(title="IGN Verified!", color=0x34d399)
+        embed.add_field(name="IGN", value=ign, inline=True)
+        embed.add_field(name="Discord", value=interaction.user.mention, inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class VerifyIGNView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Verify IGN", style=discord.ButtonStyle.primary, custom_id="verify_ign")
+    async def verify_ign(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VerifyIGNModal())
+
+
 class EnterQueueModal(discord.ui.Modal, title="Join Queue"):
     def __init__(self, gamemode, detected_region, ign_default=""):
         super().__init__()
@@ -1194,6 +1264,42 @@ class EnterQueueView(discord.ui.View):
 
         await _update_gamemode_queue_embed(gamemode)
         await _update_region_queue_embed(region)
+
+    @discord.ui.button(label="My Position", style=discord.ButtonStyle.secondary, custom_id="queue_position")
+    async def my_position(self, interaction: discord.Interaction, button: discord.ui.Button):
+        found = None
+        for rcode, rdata in tier_queue.regions.items():
+            for i, entry in enumerate(rdata["queue"]):
+                if entry["user_id"] == interaction.user.id:
+                    found = (rcode, i + 1, len(rdata["queue"]), rdata["open"])
+                    break
+            if found:
+                break
+
+        if not found:
+            return await interaction.response.send_message("You are not in any queue.", ephemeral=True)
+
+        region, pos, total, is_open = found
+        ahead = pos - 1
+        embed = discord.Embed(title=f"Queue Position — {region}", color=0x5865F2)
+        embed.add_field(name="Position", value=f"**#{pos}** of {total}", inline=True)
+        embed.add_field(name="Ahead of You", value=f"{ahead} player{'s' if ahead != 1 else ''}", inline=True)
+
+        rdata = tier_queue.regions[region]
+        testers = len(rdata["testers"])
+        if is_open and testers > 0:
+            est_min = max(5, (ahead // testers) * 12)
+            embed.add_field(name="Est. Wait", value=f"~{est_min} min", inline=True)
+        elif not is_open:
+            embed.add_field(name="Status", value="Queue closed", inline=True)
+        else:
+            embed.add_field(name="Status", value="No testers online", inline=True)
+
+        if ahead > 0:
+            ahead_users = [f"{i+1}. <@{e['user_id']}> ({e['ign']})" for i, e in enumerate(rdata["queue"][:pos-1])]
+            embed.add_field(name="Ahead of You", value="\n".join(ahead_users[-5:]), inline=False)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="openqueue")
