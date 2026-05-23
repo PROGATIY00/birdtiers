@@ -151,6 +151,15 @@ class TierlistQueue:
             return None
         return r["queue"].pop(0)
 
+    def next_for_tester(self, region, gamemodes):
+        r = self.regions.get(region)
+        if not r or not r["queue"]:
+            return None
+        for i, entry in enumerate(r["queue"]):
+            if not entry["gamemode"] or entry["gamemode"] in gamemodes:
+                return r["queue"].pop(i)
+        return None
+
     def make_region_embed(self, region):
         r = self.regions.get(region)
         if not r or not r["open"]:
@@ -1341,13 +1350,28 @@ async def closequeue(interaction: discord.Interaction, region: str):
 
 
 @bot.tree.command(name="next")
-async def next_in_queue(interaction: discord.Interaction, region: str):
-    """Claim the next player from the queue and create a ticket channel (staff only)"""
+async def next_in_queue(interaction: discord.Interaction):
+    """Claim the next player matching your region and online gamemodes (staff only)"""
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("No permission.", ephemeral=True)
-    region_u = region.upper().strip()
-    if region_u not in REGION_ROLE_IDS:
-        return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_ROLE_IDS.keys())}", ephemeral=True)
+
+    region_u = None
+    if interaction.guild and isinstance(interaction.user, discord.Member):
+        for rcode, rid in REGION_ROLE_IDS.items():
+            role = interaction.guild.get_role(rid)
+            if role and role in interaction.user.roles:
+                region_u = rcode
+                break
+    if not region_u:
+        return await interaction.response.send_message("You must have a region role (EU, NA, AF, AS, or OC) to use /next.", ephemeral=True)
+
+    # Get tester's online gamemodes
+    tester_doc = db_mgr.tester_profiles.find_one({"discord_id": interaction.user.id})
+    if not tester_doc or not tester_doc.get("online"):
+        return await interaction.response.send_message("You are not online as a tester. Use /online first.", ephemeral=True)
+    online_modes = set(tester_doc.get("gamemodes", []))
+    if not online_modes:
+        return await interaction.response.send_message("You have no gamemodes selected. Use /online <gamemodes> first.", ephemeral=True)
 
     rdata = tier_queue.regions.get(region_u)
     if not rdata or not rdata["open"]:
@@ -1355,14 +1379,15 @@ async def next_in_queue(interaction: discord.Interaction, region: str):
     if interaction.user.id not in rdata["testers"]:
         return await interaction.response.send_message("You must be a tester for this region to claim the next user. Use /openqueue first.", ephemeral=True)
 
-    entry = tier_queue.next_user(region_u)
+    entry = tier_queue.next_for_tester(region_u, online_modes)
     if not entry:
-        return await interaction.response.send_message(f"No users in the {region_u} queue.", ephemeral=True)
+        return await interaction.response.send_message(f"No users in the {region_u} queue match your online gamemodes ({', '.join(sorted(online_modes))}).", ephemeral=True)
 
     user_id = entry["user_id"]
     player_name = entry.get("ign", "Unknown")
     player_mention = f"<@{user_id}>"
     tester_mention = interaction.user.mention
+    entry_gamemode = entry.get("gamemode") or "Any"
     # Fetch full player info for tier display
     player_doc = db_mgr.players.find_one({"discord_id": user_id})
 
@@ -1386,6 +1411,7 @@ async def next_in_queue(interaction: discord.Interaction, region: str):
     # Send ticket info
     embed = discord.Embed(title=f"Next in Queue — {region_u}", color=0x34d399)
     embed.add_field(name="Player", value=f"{player_mention} ({player_name})", inline=True)
+    embed.add_field(name="Gamemode", value=entry_gamemode, inline=True)
     embed.add_field(name="Tester", value=tester_mention, inline=True)
     embed.add_field(name="Region", value=region_u, inline=True)
     if player_doc:
