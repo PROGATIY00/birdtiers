@@ -46,9 +46,110 @@ GAMEMODE_ROLE_IDS = {
     "Sword": 1507060831093788823,
     "Axe": 1507060845790888016,
     "Crystal": 1507060847980187775,
-    "Neth Pot": 1507060885238190111,
-    # "Mace": <ADD_MACE_ROLE_ID_HERE>,
+    "Pot": 1507060885238190111,
+    "UHC": 1507060966137921637,
+    "SMP": 1507061382195974366,
+    "Mace": 1507060902753734827,
 }
+
+# --- QUEUE CHANNELS PER REGION (fill in actual IDs) ---
+REGION_QUEUE_CHANNELS = {
+    "EU": 1507809038392496288,
+    "NA": 1507809068742611105,
+    "AF": 1507809079316320417,
+    "AS": 1507809090292678728,
+    "OC": 1507809110392045680,
+}
+
+REGION_TICKET_CATEGORIES = {
+    "EU": 1507809548923306004,
+    "NA": 1507809586017734846,
+    "AS": 1507809700744270066,
+    "OC": 1507809606007652672,
+}
+
+class TierlistQueue:
+    def __init__(self):
+        self.regions = {}
+
+    def setup(self):
+        for rcode in REGION_ROLE_IDS:
+            self.regions[rcode] = {
+                "queue": [],
+                "testers": [],
+                "open": False,
+                "queue_message_id": None,
+                "queue_channel_id": REGION_QUEUE_CHANNELS.get(rcode),
+                "ticket_category_id": REGION_TICKET_CATEGORIES.get(rcode),
+                "ping_role_id": REGION_ROLE_IDS[rcode],
+            }
+
+    def add_user(self, region, user_id):
+        r = self.regions.get(region)
+        if not r:
+            return "Region not found"
+        if user_id in r["queue"]:
+            return "You are already in the queue"
+        r["queue"].append(user_id)
+        return "You have been added to the queue"
+
+    def remove_user(self, region, user_id):
+        r = self.regions.get(region)
+        if not r:
+            return "Region not found"
+        if user_id not in r["queue"]:
+            return "You are not in the queue"
+        r["queue"].remove(user_id)
+        return "You have left the queue"
+
+    def add_tester(self, region, user_id):
+        r = self.regions.get(region)
+        if not r:
+            return "Region not found"
+        if not r["open"]:
+            r["open"] = True
+        if user_id in r["testers"]:
+            return "You are already testing this region"
+        r["testers"].append(user_id)
+        return "You have opened the queue"
+
+    def remove_tester(self, region, user_id):
+        r = self.regions.get(region)
+        if not r or not r["open"]:
+            return "Queue is not open"
+        if user_id not in r["testers"]:
+            return "You are not testing this region"
+        r["testers"].remove(user_id)
+        if not r["testers"]:
+            r["open"] = False
+            r["queue"] = []
+            return "Testing is closed"
+        return "You have stopped testing"
+
+    def next_user(self, region):
+        r = self.regions.get(region)
+        if not r or not r["queue"]:
+            return None
+        return r["queue"].pop(0)
+
+    def make_embed(self, region):
+        r = self.regions.get(region)
+        if not r or not r["open"]:
+            embed = discord.Embed(title=f"{region} Queue", description="Queue is closed.", color=0x525768)
+            return embed
+        queue_lines = [f"{i+1}. <@{uid}>" for i, uid in enumerate(r["queue"])]
+        tester_lines = [f"{i+1}. <@{uid}>" for i, uid in enumerate(r["testers"])]
+        embed = discord.Embed(title=f"{region} Queue", color=0xff4500)
+        embed.add_field(name="In Queue", value="\n".join(queue_lines) or "None", inline=True)
+        embed.add_field(name="Testers", value="\n".join(tester_lines) or "None", inline=True)
+        embed.set_footer(text=f"{len(r['queue'])} waiting · {len(r['testers'])} testing")
+        return embed
+
+    def format_no_queue(self):
+        embed = discord.Embed(title="Queue Closed", description="No testers are currently open.", color=0x525768)
+        return embed
+
+tier_queue = TierlistQueue()
 
 # --- GAMEMODE/REGION CHANNEL IDS (example, fill in actual IDs as needed) ---
 GAMEMODE_REGION_CHANNEL_IDS = {
@@ -413,7 +514,29 @@ class MagmaBot(discord.Client):
                 self.add_view(PartnerView(str(p["_id"]), PARTNER_CHANNEL_ID), message_id=p["message_id"])
             except Exception:
                 pass
+        self.add_view(EnterQueueView())
         refresh_queue_status.start()
+        refresh_region_queues.start()
+
+    async def on_ready(self):
+        tier_queue.setup()
+        for rcode, rdata in tier_queue.regions.items():
+            chan_id = rdata["queue_channel_id"]
+            if not chan_id:
+                continue
+            channel = self.get_channel(chan_id)
+            if not channel:
+                continue
+            try:
+                async for msg in channel.history(limit=5):
+                    if msg.author == self.user:
+                        await msg.delete()
+            except Exception:
+                pass
+            embed = tier_queue.format_no_queue()
+            view = EnterQueueView()
+            msg = await channel.send(embed=embed, view=view)
+            tier_queue.regions[rcode]["queue_message_id"] = msg.id
 
 bot = MagmaBot()
 
@@ -479,6 +602,22 @@ async def refresh_queue_status():
         await _send_or_edit_status()
     except Exception:
         pass
+
+@tasks.loop(seconds=30)
+async def refresh_region_queues():
+    for rcode, rdata in tier_queue.regions.items():
+        if not rdata["open"] or not rdata["queue_message_id"] or not rdata["queue_channel_id"]:
+            continue
+        channel = bot.get_channel(rdata["queue_channel_id"])
+        if not channel:
+            continue
+        try:
+            msg = await channel.fetch_message(rdata["queue_message_id"])
+            embed = tier_queue.make_embed(rcode)
+            view = EnterQueueView()
+            await msg.edit(embed=embed, view=view)
+        except Exception:
+            pass
 
 @bot.tree.command(name="rank")
 async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: str, tier: str, region: str, reason: str):
@@ -910,6 +1049,151 @@ class QueueView(discord.ui.View):
         await interaction.response.send_message(embed=e, ephemeral=True)
 
 
+class EnterQueueView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Enter Queue", style=discord.ButtonStyle.success, custom_id="enter_queue")
+    async def enter_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
+        region = None
+        if interaction.guild and isinstance(interaction.user, discord.Member):
+            for rcode, rid in REGION_ROLE_IDS.items():
+                role = interaction.guild.get_role(rid)
+                if role and role in interaction.user.roles:
+                    region = rcode
+                    break
+        if not region:
+            return await interaction.response.send_message("You must have a region role (EU, NA, AF, AS, or OC) to queue.", ephemeral=True)
+
+        rdata = tier_queue.regions.get(region)
+        if not rdata or not rdata["open"]:
+            return await interaction.response.send_message(f"The {region} queue is not currently open.", ephemeral=True)
+
+        player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id})
+        if not player_doc:
+            return await interaction.response.send_message("You must have a player profile first. Use the website or /queue to create one.", ephemeral=True)
+
+        result = tier_queue.add_user(region, interaction.user.id)
+        await interaction.response.send_message(result, ephemeral=True)
+
+        embed = tier_queue.make_embed(region)
+        msg = interaction.message
+        await msg.edit(embed=embed, view=self)
+
+    @discord.ui.button(label="Exit Queue", style=discord.ButtonStyle.danger, custom_id="exit_queue")
+    async def exit_queue(self, interaction: discord.Interaction, button: discord.ui.Button):
+        region = None
+        if interaction.guild and isinstance(interaction.user, discord.Member):
+            for rcode, rid in REGION_ROLE_IDS.items():
+                role = interaction.guild.get_role(rid)
+                if role and role in interaction.user.roles:
+                    region = rcode
+                    break
+        if not region:
+            return await interaction.response.send_message("You must have a region role (EU, NA, AF, AS, or OC) to queue.", ephemeral=True)
+
+        result = tier_queue.remove_user(region, interaction.user.id)
+        await interaction.response.send_message(result, ephemeral=True)
+
+        embed = tier_queue.make_embed(region)
+        msg = interaction.message
+        await msg.edit(embed=embed, view=self)
+
+
+@bot.tree.command(name="openqueue")
+async def openqueue(interaction: discord.Interaction, region: str):
+    """Open the queue for a region and mark yourself as a tester (staff only)"""
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    region_u = region.upper().strip()
+    if region_u not in REGION_ROLE_IDS:
+        return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_ROLE_IDS.keys())}", ephemeral=True)
+
+    result = tier_queue.add_tester(region_u, interaction.user.id)
+    await _update_region_queue_embed(region_u)
+    await interaction.response.send_message(f"{result} for **{region_u}**.", ephemeral=True)
+
+
+@bot.tree.command(name="closequeue")
+async def closequeue(interaction: discord.Interaction, region: str):
+    """Close the queue for a region and remove yourself as tester (staff only)"""
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    region_u = region.upper().strip()
+    if region_u not in REGION_ROLE_IDS:
+        return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_ROLE_IDS.keys())}", ephemeral=True)
+
+    result = tier_queue.remove_tester(region_u, interaction.user.id)
+    await _update_region_queue_embed(region_u)
+    await interaction.response.send_message(f"{result} for **{region_u}**.", ephemeral=True)
+
+
+@bot.tree.command(name="next")
+async def next_in_queue(interaction: discord.Interaction, region: str):
+    """Claim the next player from the queue and create a ticket channel (staff only)"""
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    region_u = region.upper().strip()
+    if region_u not in REGION_ROLE_IDS:
+        return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_ROLE_IDS.keys())}", ephemeral=True)
+
+    rdata = tier_queue.regions.get(region_u)
+    if not rdata or not rdata["open"]:
+        return await interaction.response.send_message(f"The {region_u} queue is not open.", ephemeral=True)
+    if interaction.user.id not in rdata["testers"]:
+        return await interaction.response.send_message("You must be a tester for this region to claim the next user. Use /openqueue first.", ephemeral=True)
+
+    user_id = tier_queue.next_user(region_u)
+    if not user_id:
+        return await interaction.response.send_message(f"No users in the {region_u} queue.", ephemeral=True)
+
+    # Fetch player info from DB
+    player_doc = db_mgr.players.find_one({"discord_id": user_id})
+    player_name = player_doc.get("username", "Unknown") if player_doc else "Unknown"
+    player_mention = f"<@{user_id}>"
+    tester_mention = interaction.user.mention
+
+    # Create ticket channel in region's category
+    category_id = rdata["ticket_category_id"]
+    ticket_channel = None
+    if category_id:
+        category = bot.get_channel(category_id)
+        if category and isinstance(category, discord.CategoryChannel):
+            overwrites = {
+                interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            }
+            target_member = interaction.guild.get_member(user_id)
+            if target_member:
+                overwrites[target_member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            safe_name = player_name.replace(" ", "-").lower()[:32]
+            ticket_channel = await category.create_text_channel(f"ticket-{safe_name}", overwrites=overwrites)
+
+    # Send ticket info
+    embed = discord.Embed(title=f"Next in Queue — {region_u}", color=0x34d399)
+    embed.add_field(name="Player", value=f"{player_mention} ({player_name})", inline=True)
+    embed.add_field(name="Tester", value=tester_mention, inline=True)
+    embed.add_field(name="Region", value=region_u, inline=True)
+    if player_doc:
+        active_modes = []
+        for gm in MODES:
+            record = db_mgr.players.find_one({"discord_id": user_id, "gamemode": gm})
+            if record and not record.get("retired") and not record.get("banned"):
+                active_modes.append(f"{gm}: {record.get('tier', 'N/A')}")
+        if active_modes:
+            embed.add_field(name="Tiers", value="\n".join(active_modes), inline=False)
+
+    msg = f"{player_mention}, {tester_mention}"
+    if ticket_channel:
+        msg += f"\nTicket channel: {ticket_channel.mention}"
+        await ticket_channel.send(embed=embed)
+    await interaction.response.send_message(msg, ephemeral=False)
+
+    # Update the queue embed
+    await _update_region_queue_embed(region_u)
+
+
 def _update_queue_channel():
     testers = _get_tester_profiles()
     waiting = sorted(db_mgr.queues.find({"status": "waiting"}), key=lambda x: x.get("ts") or datetime.datetime.min)
@@ -1030,11 +1314,9 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
         super().__init__()
         self.ign_input = discord.ui.TextInput(label="IGN", placeholder="Your Minecraft username", required=False, max_length=30)
         self.gamemode_input = discord.ui.TextInput(label="Gamemode", placeholder="e.g. Crystal, UHC, Pot", required=True, max_length=20)
-        self.region_input = discord.ui.TextInput(label="Region", placeholder="NA, EU, AS, SA, OC, AF", required=True, max_length=5)
-        self.server_input = discord.ui.TextInput(label="Recommended Server", placeholder="e.g. 0.0.0.0:25565", required=True, max_length=100)
+        self.server_input = discord.ui.TextInput(label="Server IP (optional)", placeholder="e.g. 0.0.0.0:25565", required=False, max_length=100)
         self.add_item(self.ign_input)
         self.add_item(self.gamemode_input)
-        self.add_item(self.region_input)
         self.add_item(self.server_input)
 
     @property
@@ -1044,14 +1326,11 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
 
     async def on_submit(self, interaction: discord.Interaction):
         gamemode = self.gamemode_input.value.strip()
-        region = self.region_input.value.strip().upper()
-        server = self.server_input.value.strip()
+        server = self.server_input.value.strip() or None
 
         n_mode = normalize_mode(gamemode)
         if n_mode not in MODES:
             return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
-        if region not in REGION_ROLE_IDS:
-            return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_ROLE_IDS.keys())}", ephemeral=True)
         if _is_gamemode_closed(n_mode):
             return await interaction.response.send_message(f"**{n_mode}** is currently closed in the queue.", ephemeral=True)
 
@@ -1059,9 +1338,23 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
         if cooldown:
             return await interaction.response.send_message(f"You're already in queue for {cooldown}", ephemeral=True)
 
+        # Detect region from roles
+        region = None
+        if interaction.guild and isinstance(interaction.user, discord.Member):
+            for rcode, rid in REGION_ROLE_IDS.items():
+                role = interaction.guild.get_role(rid)
+                if role and role in interaction.user.roles:
+                    region = rcode
+                    break
+        if not region:
+            return await interaction.response.send_message(
+                "You need a region role (EU, NA, AF, AS, OC) to queue. Ask a staff member to assign one.",
+                ephemeral=True,
+            )
+
         # Only ask for IGN if not tested before
         ign = self.ign_input.value.strip()
-        player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id, "gamemode": n_mode})
+        player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id})
         if not ign and player_doc:
             ign = player_doc.get("username", "")
         if not ign:
@@ -1084,7 +1377,7 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
                     except Exception:
                         pass
 
-        # Assign gamemode role to user (optional, if desired)
+        # Assign gamemode role to user
         gamemode_role_id = GAMEMODE_ROLE_IDS.get(n_mode)
         if gamemode_role_id:
             guild = interaction.guild
@@ -1105,14 +1398,17 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
         }
         queue_id = db_mgr.queues.insert_one(entry).inserted_id
 
+        # Calculate queue position
+        position = db_mgr.queues.count_documents({
+            "gamemode": n_mode, "status": "waiting", "ts": {"$lt": entry["ts"]}
+        }) + 1
+
         # Send queue entry with buttons to claim channel
-        # Use gamemode/region channel if set, else fallback
         channel_id = GAMEMODE_REGION_CHANNEL_IDS.get((n_mode, region)) or CLAIM_CHANNEL_ID
         claim_channel = interaction.client.get_channel(channel_id)
         if claim_channel:
             entry_embed = _build_entry_embed(n_mode, ign, region, interaction.user.mention, server=server)
             view = QueueView(status="waiting")
-            # Ping gamemode role in the message to testers
             ping_str = f"<@&{gamemode_role_id}>" if gamemode_role_id else ""
             msg = await claim_channel.send(content=ping_str, embed=entry_embed, view=view)
             db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
@@ -1122,7 +1418,11 @@ class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
             await _send_or_edit_status()
         except Exception:
             pass
-        await interaction.response.send_message(f"You've been queued for **{n_mode}** ({region})!", ephemeral=True)
+
+        await interaction.response.send_message(
+            f"Queued **{ign}** for {n_mode} ({region}). Position: **#{position}**" + (f"\nServer: {server}" if server else ""),
+            ephemeral=True,
+        )
 
 
 
@@ -1343,15 +1643,8 @@ async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str
 
 
 @bot.tree.command(name="online")
-async def tester_online(interaction: discord.Interaction, region: str, gamemodes: str):
-    """Set yourself online for specific gamemodes. Example: /online NA Crystal,UHC"""
-    region_u = region.upper().strip()
-    if region_u not in REGION_COLORS:
-        return await interaction.response.send_message(
-            f"Invalid region. Choose: {', '.join(REGION_COLORS.keys())}",
-            ephemeral=True,
-        )
-
+async def tester_online(interaction: discord.Interaction, gamemodes: str):
+    """Set yourself online for specific gamemodes. Region detected from your roles."""
     parsed = set(normalize_mode(m.strip()) for m in gamemodes.split(","))
     parsed = {m for m in parsed if m in MODES}
 
@@ -1362,6 +1655,20 @@ async def tester_online(interaction: discord.Interaction, region: str, gamemodes
         )
 
     parsed_list = sorted(parsed)
+
+    region_u = None
+    if interaction.guild and isinstance(interaction.user, discord.Member):
+        for rcode, rid in REGION_ROLE_IDS.items():
+            role = interaction.guild.get_role(rid)
+            if role and role in interaction.user.roles:
+                region_u = rcode
+                break
+
+    if not region_u:
+        return await interaction.response.send_message(
+            "You must have a region role (EU, NA, AF, AS, or OC) assigned to use this command.",
+            ephemeral=True,
+        )
 
     ign = None
     player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id})
@@ -1380,6 +1687,10 @@ async def tester_online(interaction: discord.Interaction, region: str, gamemodes
         upsert=True,
     )
 
+    # Auto-open the region queue when tester goes online
+    tier_queue.add_tester(region_u, interaction.user.id)
+    await _update_region_queue_embed(region_u)
+
     modes_str = ", ".join(parsed_list)
     embed = discord.Embed(title="You're now online!", color=0x34d399)
     embed.add_field(name="IGN", value=ign or "Not set", inline=True)
@@ -1389,6 +1700,32 @@ async def tester_online(interaction: discord.Interaction, region: str, gamemodes
     await _refresh_queue_channel(interaction.client)
 
 
+async def _update_region_queue_embed(region):
+    rdata = tier_queue.regions.get(region)
+    if not rdata:
+        return
+    embed = tier_queue.make_embed(region)
+    chan_id = rdata["queue_channel_id"]
+    if not chan_id:
+        return
+    channel = bot.get_channel(chan_id)
+    if not channel:
+        return
+    msg_id = rdata["queue_message_id"]
+    if msg_id:
+        try:
+            msg = await channel.fetch_message(msg_id)
+            await msg.edit(embed=embed, view=EnterQueueView())
+        except Exception:
+            pass
+    else:
+        try:
+            msg = await channel.send(embed=embed, view=EnterQueueView())
+            rdata["queue_message_id"] = msg.id
+        except Exception:
+            pass
+
+
 @bot.tree.command(name="offline")
 async def tester_offline(interaction: discord.Interaction, gamemodes: str):
     """Go offline in specific gamemodes or all. Example: /offline Crystal,UHC"""
@@ -1396,12 +1733,25 @@ async def tester_offline(interaction: discord.Interaction, gamemodes: str):
     if not existing:
         return await interaction.response.send_message("You're not in the tester list.", ephemeral=True)
 
+    region_u = existing.get("region")
+    if not region_u:
+        region_u = None
+        if interaction.guild and isinstance(interaction.user, discord.Member):
+            for rcode, rid in REGION_ROLE_IDS.items():
+                role = interaction.guild.get_role(rid)
+                if role and role in interaction.user.roles:
+                    region_u = rcode
+                    break
+
     lowered = gamemodes.strip().lower()
     if lowered == "all":
         db_mgr.tester_profiles.update_one(
             {"discord_id": interaction.user.id},
             {"$set": {"online": False, "ts": datetime.datetime.utcnow()}},
         )
+        if region_u:
+            tier_queue.remove_tester(region_u, interaction.user.id)
+            await _update_region_queue_embed(region_u)
         await interaction.response.send_message("You're now **offline** for all gamemodes.", ephemeral=True)
         await _refresh_queue_channel(interaction.client)
         return
@@ -1423,6 +1773,9 @@ async def tester_offline(interaction: discord.Interaction, gamemodes: str):
             {"discord_id": interaction.user.id},
             {"$set": {"online": False, "gamemodes": [], "ts": datetime.datetime.utcnow()}},
         )
+        if region_u:
+            tier_queue.remove_tester(region_u, interaction.user.id)
+            await _update_region_queue_embed(region_u)
         await interaction.response.send_message("All gamemodes removed. You're now **offline**.", ephemeral=True)
     else:
         db_mgr.tester_profiles.update_one(
