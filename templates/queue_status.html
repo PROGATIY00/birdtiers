@@ -18,7 +18,17 @@
 </div>
 {% endif %}
 
+
 <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px;">
+    <h2 style="margin:0 0 12px;font-size:1.1rem;">Join the Queue</h2>
+    <p style="color:#9ba3af;">Select a gamemode to join the queue. Closed gamemodes are disabled.</p>
+    <div id="queue-dropdown">
+        <!-- The Discord bot will render the dropdown and button here. -->
+        <em>Use the Discord server to join the queue with the dropdown and button below the queue status message.</em>
+    </div>
+</div>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px;margin-top:16px;">
     <h2 style="margin:0 0 12px;font-size:1.1rem;">Waiting List ({{ waiting|length }})</h2>
     {% if waiting %}
         {% for w in waiting %}
