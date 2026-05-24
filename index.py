@@ -837,6 +837,10 @@ class EnterQueueView(discord.ui.View):
         if not gamemode:
             return await interaction.response.send_message("This channel is not set up for queuing.", ephemeral=True)
 
+        player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id})
+        if player_doc and player_doc.get("banned"):
+            return await interaction.response.send_message("You are restricted from queuing.", ephemeral=True)
+
         detected_region = None
         if interaction.guild and isinstance(interaction.user, discord.Member):
             for rcode, rid in REGION_ROLE_IDS.items():
@@ -845,7 +849,17 @@ class EnterQueueView(discord.ui.View):
                     detected_region = rcode
                     break
 
-        player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id})
+        if player_doc and player_doc.get("username") and detected_region:
+            ign = player_doc["username"]
+            rdata = tier_queue.regions.get(detected_region)
+            if not rdata or not rdata["open"]:
+                return await interaction.response.send_message(f"The {detected_region} queue is not currently open.", ephemeral=True)
+            result = tier_queue.add_user(detected_region, interaction.user.id, ign=ign, gamemode=gamemode)
+            await interaction.response.send_message(result, ephemeral=True)
+            await _update_gamemode_queue_embed(gamemode)
+            await _update_region_queue_embed(detected_region)
+            return
+
         ign_default = player_doc.get("username", "") if player_doc else ""
         view = RegionSelectView(gamemode, detected_region or "NA", ign_default=ign_default)
         await interaction.response.send_message("Select your region:", view=view, ephemeral=True)
