@@ -103,6 +103,7 @@ class TierlistQueue:
             self.gamemodes[gm] = {
                 "channel_id": GAMEMODE_QUEUE_CHANNELS[gm],
                 "message_id": None,
+                "was_open": False,
             }
 
     def add_user(self, region, user_id, ign="Unknown", gamemode=None):
@@ -231,6 +232,12 @@ class TierlistQueue:
         embed.add_field(name="Queue by Region", value="\n".join(region_lines) or "None", inline=False)
         embed.set_footer(text=f"{total_waiting} total waiting · {total_testers} testers online")
         return embed
+
+    def is_gamemode_open(self, gamemode):
+        for rdata in self.regions.values():
+            if rdata["open"]:
+                return True
+        return False
 
     def format_no_queue(self):
         embed = discord.Embed(title="Queue Closed", description="No testers are currently open.", color=0x525768)
@@ -1210,6 +1217,7 @@ async def _update_gamemode_queue_embed(gamemode):
     gdata = tier_queue.gamemodes.get(gamemode)
     if not gdata:
         return
+    is_open = tier_queue.is_gamemode_open(gamemode)
     embed = tier_queue.make_gamemode_embed(gamemode)
     chan_id = gdata["channel_id"]
     if not chan_id:
@@ -1218,15 +1226,24 @@ async def _update_gamemode_queue_embed(gamemode):
     if not channel:
         return
     msg_id = gdata.get("message_id")
+    role_id = GAMEMODE_ROLE_IDS.get(gamemode)
+    should_ping = is_open and not gdata["was_open"]
+    gdata["was_open"] = is_open
+    ping_role = f"<@&{role_id}>" if (should_ping and role_id) else ""
+
+    content = ping_role if ping_role else None
     if msg_id:
         try:
             msg = await channel.fetch_message(msg_id)
-            await msg.edit(embed=embed, view=EnterQueueView())
+            if content:
+                await msg.edit(content=content, embed=embed, view=EnterQueueView())
+            else:
+                await msg.edit(embed=embed, view=EnterQueueView())
         except Exception:
             pass
     else:
         try:
-            msg = await channel.send(embed=embed, view=EnterQueueView())
+            msg = await channel.send(content=content or "", embed=embed, view=EnterQueueView())
             gdata["message_id"] = msg.id
         except Exception:
             pass
