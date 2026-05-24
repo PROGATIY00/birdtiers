@@ -1226,19 +1226,23 @@ async def _update_gamemode_queue_embed(gamemode):
     if not channel:
         return
     msg_id = gdata.get("message_id")
-    role_id = GAMEMODE_ROLE_IDS.get(gamemode)
     should_ping = is_open and not gdata["was_open"]
     gdata["was_open"] = is_open
-    ping_role = f"<@&{role_id}>" if (should_ping and role_id) else ""
 
-    content = ping_role if ping_role else None
+    role_id = GAMEMODE_ROLE_IDS.get(gamemode)
+    if should_ping and role_id and msg_id:
+        try:
+            old_msg = await channel.fetch_message(msg_id)
+            await old_msg.delete()
+        except Exception:
+            pass
+        msg_id = None
+
+    content = f"<@&{role_id}>" if (should_ping and role_id) else None
     if msg_id:
         try:
             msg = await channel.fetch_message(msg_id)
-            if content:
-                await msg.edit(content=content, embed=embed, view=EnterQueueView())
-            else:
-                await msg.edit(embed=embed, view=EnterQueueView())
+            await msg.edit(embed=embed, view=EnterQueueView())
         except Exception:
             pass
     else:
