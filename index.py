@@ -208,7 +208,9 @@ class TierlistQueue:
                 if not e["gamemode"] or e["gamemode"] == gamemode:
                     queue_entries.append(e)
             for uid in rdata["testers"]:
-                tester_entries.append(uid)
+                tdoc = db_mgr.tester_profiles.find_one({"discord_id": uid, "online": True})
+                if tdoc and gamemode in tdoc.get("gamemodes", []):
+                    tester_entries.append(uid)
 
         regions_str = ", ".join(open_regions) if open_regions else "None"
 
