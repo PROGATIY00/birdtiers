@@ -1407,15 +1407,25 @@ class CloseTicketButton(discord.ui.View):
 
 # --- NEW COMMANDS ---
 
+def _ensure_player(user_id, username=None):
+    doc = db_mgr.players.find_one({"discord_id": user_id})
+    if not doc:
+        db_mgr.players.insert_one({
+            "discord_id": user_id,
+            "username": username or "Unknown",
+            "tier": "none",
+            "banned": False,
+            "ts": datetime.datetime.utcnow(),
+        })
+        return db_mgr.players.find_one({"discord_id": user_id})
+    return doc
+
 @bot.tree.command(name="givetier", description="Closes a ticket and gives a tier to a user (staff only)")
 async def givetier(interaction: discord.Interaction, user: discord.Member, tier: str):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
 
-    player_doc = db_mgr.players.find_one({"discord_id": user.id})
-    if not player_doc:
-        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
-
+    player_doc = _ensure_player(user.id, user.display_name)
     is_banned = player_doc.get("banned", False)
     if is_banned:
         return await interaction.response.send_message("User is restricted.", ephemeral=True)
@@ -1505,11 +1515,7 @@ async def updateusername(interaction: discord.Interaction, user: discord.Member,
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
 
-    player_doc = db_mgr.players.find_one({"discord_id": user.id})
-    if not player_doc:
-        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
-
-    uuid = resolve_uuid(username)
+    player_doc = _ensure_player(user.id, user.display_name)
     if not uuid:
         return await interaction.response.send_message("Minecraft username does not exist.", ephemeral=True)
 
@@ -1541,10 +1547,7 @@ async def restrict(interaction: discord.Interaction, user: discord.Member):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
 
-    player_doc = db_mgr.players.find_one({"discord_id": user.id})
-    if not player_doc:
-        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
-
+    _ensure_player(user.id, user.display_name)
     db_mgr.players.update_one(
         {"discord_id": user.id},
         {"$set": {"banned": True, "ts": datetime.datetime.utcnow()}},
@@ -1557,10 +1560,7 @@ async def unrestrict(interaction: discord.Interaction, user: discord.Member):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
 
-    player_doc = db_mgr.players.find_one({"discord_id": user.id})
-    if not player_doc:
-        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
-
+    _ensure_player(user.id, user.display_name)
     db_mgr.players.update_one(
         {"discord_id": user.id},
         {"$set": {"banned": False, "ts": datetime.datetime.utcnow()}},
@@ -1570,9 +1570,7 @@ async def unrestrict(interaction: discord.Interaction, user: discord.Member):
 
 @bot.tree.command(name="info", description="Shows information about a user")
 async def info(interaction: discord.Interaction, user: discord.Member):
-    player_doc = db_mgr.players.find_one({"discord_id": user.id})
-    if not player_doc:
-        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
+    player_doc = _ensure_player(user.id, user.display_name)
 
     username = player_doc.get("username", "Unknown")
     tier = player_doc.get("tier", "none")
