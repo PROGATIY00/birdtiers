@@ -103,7 +103,6 @@ class TierlistQueue:
             self.gamemodes[gm] = {
                 "channel_id": GAMEMODE_QUEUE_CHANNELS[gm],
                 "message_id": None,
-                "was_open": False,
             }
 
     def add_user(self, region, user_id, ign="Unknown", gamemode=None):
@@ -818,6 +817,14 @@ class EnterQueueModal(discord.ui.Modal, title="Join Queue"):
         result = tier_queue.add_user(self.region, interaction.user.id, ign=ign, gamemode=self.gamemode)
         await interaction.response.send_message(result, ephemeral=True)
 
+        if "added" in result.lower():
+            role_id = GAMEMODE_ROLE_IDS.get(self.gamemode)
+            gdata = tier_queue.gamemodes.get(self.gamemode)
+            if role_id and gdata:
+                gchan = bot.get_channel(gdata["channel_id"])
+                if gchan:
+                    await gchan.send(f"<@&{role_id}>", delete_after=1)
+
         await _update_gamemode_queue_embed(self.gamemode)
         await _update_region_queue_embed(self.region)
 
@@ -878,6 +885,13 @@ class EnterQueueView(discord.ui.View):
                 return await interaction.response.send_message(f"The {detected_region} queue is not currently open.", ephemeral=True)
             result = tier_queue.add_user(detected_region, interaction.user.id, ign=ign, gamemode=gamemode)
             await interaction.response.send_message(result, ephemeral=True)
+            if "added" in result.lower():
+                role_id = GAMEMODE_ROLE_IDS.get(gamemode)
+                gdata = tier_queue.gamemodes.get(gamemode)
+                if role_id and gdata:
+                    gchan = bot.get_channel(gdata["channel_id"])
+                    if gchan:
+                        await gchan.send(f"<@&{role_id}>", delete_after=1)
             await _update_gamemode_queue_embed(gamemode)
             await _update_region_queue_embed(detected_region)
             return
@@ -1226,19 +1240,6 @@ async def _update_gamemode_queue_embed(gamemode):
     if not channel:
         return
     msg_id = gdata.get("message_id")
-    should_ping = is_open and not gdata["was_open"]
-    gdata["was_open"] = is_open
-
-    role_id = GAMEMODE_ROLE_IDS.get(gamemode)
-    if should_ping and role_id and msg_id:
-        try:
-            old_msg = await channel.fetch_message(msg_id)
-            await old_msg.delete()
-        except Exception:
-            pass
-        msg_id = None
-
-    content = f"<@&{role_id}>" if (should_ping and role_id) else None
     if msg_id:
         try:
             msg = await channel.fetch_message(msg_id)
@@ -1247,7 +1248,7 @@ async def _update_gamemode_queue_embed(gamemode):
             pass
     else:
         try:
-            msg = await channel.send(content=content or "", embed=embed, view=EnterQueueView())
+            msg = await channel.send(embed=embed, view=EnterQueueView())
             gdata["message_id"] = msg.id
         except Exception:
             pass
