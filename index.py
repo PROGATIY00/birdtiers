@@ -194,13 +194,26 @@ class TierlistQueue:
     def make_gamemode_embed(self, gamemode):
         total_waiting = 0
         total_testers = 0
+        any_open = False
         region_lines = []
         for rcode, rdata in self.regions.items():
+            if rdata["open"]:
+                any_open = True
             count = sum(1 for e in rdata["queue"] if e["gamemode"] == gamemode or not e["gamemode"])
             testers = len(rdata["testers"])
-            region_lines.append(f"{rcode}: {count} waiting, {testers} testing")
+            region_lines.append(f"{rcode}: {count} waiting, {testers} testing" + (" <:added:1505555664116781107>" if rdata["open"] else " <:removed:1505555719074742383>"))
             total_waiting += count
             total_testers += testers
+
+        if not any_open:
+            embed = discord.Embed(
+                title=f"{gamemode} Queue — Closed",
+                description="No testers are currently online in any region. Please wait for a tester to come online.",
+                color=0xed4245,
+            )
+            embed.add_field(name="Queue by Region", value="\n".join(region_lines) or "None", inline=False)
+            embed.set_footer(text="Queue is closed")
+            return embed
 
         if total_testers > 0 and total_waiting > 0:
             est_min = max(5, (total_waiting // total_testers) * 12)
