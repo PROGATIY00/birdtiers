@@ -202,7 +202,11 @@ class TierlistQueue:
         tester_entries = []
         open_regions = []
         for rcode, rdata in self.regions.items():
-            if rdata["open"]:
+            has_tester = any(
+                db_mgr.tester_profiles.find_one({"discord_id": uid, "online": True, "gamemodes": gamemode})
+                for uid in rdata["testers"]
+            )
+            if has_tester:
                 open_regions.append(rcode)
             for e in rdata["queue"]:
                 if not e["gamemode"] or e["gamemode"] == gamemode:
@@ -248,11 +252,16 @@ class TierlistQueue:
         embed.set_footer(text=f"🌍 Region: {regions_str} | ⏱️ Last Refresh: {time_str}")
         return embed
 
-    def is_gamemode_open(self, gamemode):
+    def has_testers_for_gamemode(self, gamemode):
         for rdata in self.regions.values():
-            if rdata["open"]:
-                return True
+            for uid in rdata["testers"]:
+                tdoc = db_mgr.tester_profiles.find_one({"discord_id": uid, "online": True})
+                if tdoc and gamemode in tdoc.get("gamemodes", []):
+                    return True
         return False
+
+    def is_gamemode_open(self, gamemode):
+        return self.has_testers_for_gamemode(gamemode)
 
     def format_no_queue(self):
         embed = discord.Embed(title="Queue Closed", description="No testers are currently open.", color=0x525768)
@@ -1279,7 +1288,9 @@ async def _update_gamemode_queue_embed(gamemode):
         return
 
     open_regions = [rc for rc, rd in tier_queue.regions.items() if rd["open"]]
-    content = f"@here a {gamemode} queue is open for the {', '.join(open_regions)} region{'s' if len(open_regions) > 1 else ''}!"
+    role_id = GAMEMODE_ROLE_IDS.get(gamemode)
+    ping = f"<@&{role_id}>" if role_id else "@here"
+    content = f"{ping} a {gamemode} queue is open for the {', '.join(open_regions)} region{'s' if len(open_regions) > 1 else ''}!"
 
     if just_opened:
         if msg_id:
