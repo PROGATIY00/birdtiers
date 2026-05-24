@@ -103,6 +103,8 @@ class TierlistQueue:
             self.gamemodes[gm] = {
                 "channel_id": GAMEMODE_QUEUE_CHANNELS[gm],
                 "message_id": None,
+                "was_open": False,
+                "closed_at": None,
             }
 
     def add_user(self, region, user_id, ign="Unknown", gamemode=None):
@@ -192,44 +194,56 @@ class TierlistQueue:
         return embed
 
     def make_gamemode_embed(self, gamemode):
-        total_waiting = 0
-        total_testers = 0
-        any_open = False
-        region_lines = []
+        now = datetime.datetime.now()
+        time_str = now.strftime("%I:%M:%S %p").lstrip("0").lower()
+        gdata = self.gamemodes.get(gamemode)
+
+        queue_entries = []
+        tester_entries = []
+        open_regions = []
         for rcode, rdata in self.regions.items():
             if rdata["open"]:
-                any_open = True
-            count = sum(1 for e in rdata["queue"] if e["gamemode"] == gamemode or not e["gamemode"])
-            testers = len(rdata["testers"])
-            region_lines.append(f"{rcode}: {count} waiting, {testers} testing" + (" <:added:1505555664116781107>" if rdata["open"] else " <:removed:1505555719074742383>"))
-            total_waiting += count
-            total_testers += testers
+                open_regions.append(rcode)
+            for e in rdata["queue"]:
+                if not e["gamemode"] or e["gamemode"] == gamemode:
+                    queue_entries.append(e)
+            for uid in rdata["testers"]:
+                tester_entries.append(uid)
 
-        if not any_open:
+        regions_str = ", ".join(open_regions) if open_regions else "None"
+
+        if not open_regions:
+            closed_at = gdata.get("closed_at") if gdata else None
+            if closed_at:
+                closed_local = closed_at.replace(tzinfo=datetime.timezone.utc).astimezone()
+                ended_str = closed_local.strftime("%d %b %Y at %I:%M %p")
+            else:
+                ended_str = time_str
             embed = discord.Embed(
-                title=f"{gamemode} Queue — Closed",
-                description="No testers are currently online in any region. Please wait for a tester to come online.",
+                title=f"\U0001f512 {gamemode} Queue Closed",
+                description="This testing session has ended. You will be notified here when a new queue opens.",
                 color=0xed4245,
             )
-            embed.add_field(name="Queue by Region", value="\n".join(region_lines) or "None", inline=False)
-            embed.set_footer(text="Queue is closed")
+            embed.add_field(name="📋 Reason", value="Queue manually ended by command", inline=False)
+            embed.add_field(name="⏰ Session Ended", value=ended_str, inline=False)
+            embed.set_footer(text="Thank you for testing!")
             return embed
 
-        if total_testers > 0 and total_waiting > 0:
-            est_min = max(5, (total_waiting // total_testers) * 12)
-            eta = f"~{est_min} min"
-        elif total_waiting > 0:
-            eta = "Waiting for testers..."
-        else:
-            eta = "No queue"
+        queue_lines = [f"<@{e['user_id']}>" for e in queue_entries[:15]]
+        if len(queue_entries) > 15:
+            queue_lines.append(f"+{len(queue_entries) - 15} more")
+        queue_val = "\n".join(queue_lines) if queue_lines else "None"
+
+        tester_lines = [f"<@{uid}>" for uid in tester_entries[:15]]
+        tester_val = "\n".join(tester_lines) if tester_lines else "None"
 
         embed = discord.Embed(
-            title=f"{gamemode} Queue",
-            description=f"**Est. Wait: {eta}**\nClick Enter to join the queue.",
+            description=f"✅ **{gamemode} Tester Available!**\nThe queue is now open and updates in real-time.",
             color=0x5865F2,
         )
-        embed.add_field(name="Queue by Region", value="\n".join(region_lines) or "None", inline=False)
-        embed.set_footer(text=f"{total_waiting} total waiting · {total_testers} testers online")
+        embed.add_field(name="📋 Queue", value=queue_val, inline=False)
+        embed.add_field(name="🎮 Active Testers", value=tester_val, inline=False)
+        embed.set_footer(text=f"🌍 Region: {regions_str} | ⏱️ Last Refresh: {time_str}")
         return embed
 
     def is_gamemode_open(self, gamemode):
@@ -1240,18 +1254,57 @@ async def _update_gamemode_queue_embed(gamemode):
     if not channel:
         return
     msg_id = gdata.get("message_id")
-    if msg_id:
+
+    just_opened = is_open and not gdata["was_open"]
+    just_closed = not is_open and gdata["was_open"]
+    if just_closed:
+        gdata["closed_at"] = datetime.datetime.utcnow()
+    gdata["was_open"] = is_open
+
+    if not is_open:
+        if msg_id:
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.edit(content=None, embed=embed, view=EnterQueueView())
+            except Exception:
+                pass
+        else:
+            try:
+                msg = await channel.send(embed=embed, view=EnterQueueView())
+                gdata["message_id"] = msg.id
+            except Exception:
+                pass
+        return
+
+    open_regions = [rc for rc, rd in tier_queue.regions.items() if rd["open"]]
+    content = f"@here a {gamemode} queue is open for the {', '.join(open_regions)} region{'s' if len(open_regions) > 1 else ''}!"
+
+    if just_opened:
+        if msg_id:
+            try:
+                old = await channel.fetch_message(msg_id)
+                await old.delete()
+            except Exception:
+                pass
+            msg_id = None
         try:
-            msg = await channel.fetch_message(msg_id)
-            await msg.edit(embed=embed, view=EnterQueueView())
-        except Exception:
-            pass
-    else:
-        try:
-            msg = await channel.send(embed=embed, view=EnterQueueView())
+            msg = await channel.send(content=content, embed=embed, view=EnterQueueView())
             gdata["message_id"] = msg.id
         except Exception:
             pass
+    else:
+        if msg_id:
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.edit(embed=embed, view=EnterQueueView())
+            except Exception:
+                pass
+        else:
+            try:
+                msg = await channel.send(embed=embed, view=EnterQueueView())
+                gdata["message_id"] = msg.id
+            except Exception:
+                pass
 
 
 @bot.tree.command(name="offline")
