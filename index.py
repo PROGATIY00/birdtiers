@@ -842,14 +842,6 @@ class EnterQueueModal(discord.ui.Modal, title="Join Queue"):
         result = tier_queue.add_user(self.region, interaction.user.id, ign=ign, gamemode=self.gamemode)
         await interaction.response.send_message(result, ephemeral=True)
 
-        if "added" in result.lower():
-            role_id = GAMEMODE_ROLE_IDS.get(self.gamemode)
-            gdata = tier_queue.gamemodes.get(self.gamemode)
-            if role_id and gdata:
-                gchan = bot.get_channel(gdata["channel_id"])
-                if gchan:
-                    await gchan.send(f"<@&{role_id}>", delete_after=1)
-
         await _update_gamemode_queue_embed(self.gamemode)
         await _update_region_queue_embed(self.region)
 
@@ -910,13 +902,6 @@ class EnterQueueView(discord.ui.View):
                 return await interaction.response.send_message(f"The {detected_region} queue is not currently open.", ephemeral=True)
             result = tier_queue.add_user(detected_region, interaction.user.id, ign=ign, gamemode=gamemode)
             await interaction.response.send_message(result, ephemeral=True)
-            if "added" in result.lower():
-                role_id = GAMEMODE_ROLE_IDS.get(gamemode)
-                gdata = tier_queue.gamemodes.get(gamemode)
-                if role_id and gdata:
-                    gchan = bot.get_channel(gdata["channel_id"])
-                    if gchan:
-                        await gchan.send(f"<@&{role_id}>", delete_after=1)
             await _update_gamemode_queue_embed(gamemode)
             await _update_region_queue_embed(detected_region)
             return
@@ -1217,6 +1202,15 @@ async def tester_online(interaction: discord.Interaction, gamemodes: str):
     # Auto-open the region queue when tester goes online
     tier_queue.add_tester(region_u, interaction.user.id)
     await _update_region_queue_embed(region_u)
+
+    # Ping each gamemode role in its channel
+    for gm in parsed_list:
+        role_id = GAMEMODE_ROLE_IDS.get(gm)
+        chan_id = GAMEMODE_QUEUE_CHANNELS.get(gm)
+        if role_id and chan_id:
+            gchan = bot.get_channel(chan_id)
+            if gchan:
+                await gchan.send(f"<@&{role_id}>", delete_after=1)
 
     modes_str = ", ".join(parsed_list)
     embed = discord.Embed(title="You're now online!", color=0x34d399)
