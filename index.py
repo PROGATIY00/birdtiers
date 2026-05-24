@@ -81,9 +81,12 @@ GAMEMODE_QUEUE_CHANNELS = {
 }
 
 class TierlistQueue:
-    def __init__(self):
+    def __init__(self, maxQueue=20, maxTesters=5, cooldown=1440):
         self.regions = {}
         self.gamemodes = {}
+        self.maxQueue = maxQueue
+        self.maxTesters = maxTesters
+        self.cooldown = cooldown
 
     def setup(self):
         for rcode in REGION_ROLE_IDS:
@@ -92,6 +95,7 @@ class TierlistQueue:
                 "testers": [],
                 "open": False,
                 "queue_channel_id": REGION_QUEUE_CHANNELS.get(rcode),
+                "queue_message_id": None,
                 "ticket_category_id": REGION_TICKET_CATEGORIES.get(rcode),
                 "ping_role_id": REGION_ROLE_IDS[rcode],
             }
@@ -108,6 +112,8 @@ class TierlistQueue:
         for entry in r["queue"]:
             if entry["user_id"] == user_id:
                 return "You are already in the queue"
+        if len(r["queue"]) >= self.maxQueue:
+            return "The queue is full!"
         r["queue"].append({"user_id": user_id, "ign": ign, "gamemode": gamemode})
         return "You have been added to the queue"
 
@@ -129,6 +135,8 @@ class TierlistQueue:
             r["open"] = True
         if user_id in r["testers"]:
             return "You are already testing this region"
+        if len(r["testers"]) >= self.maxTesters:
+            return "Max testers reached for this region"
         r["testers"].append(user_id)
         return "You have opened the queue"
 
@@ -160,16 +168,26 @@ class TierlistQueue:
                 return r["queue"].pop(i)
         return None
 
+    def addQueueMessageId(self, region, message_id):
+        r = self.regions.get(region)
+        if r:
+            r["queue_message_id"] = message_id
+
+    def getqueueraw(self):
+        return self.regions
+
     def make_region_embed(self, region):
         r = self.regions.get(region)
         if not r or not r["open"]:
             embed = discord.Embed(title=f"{region} Queue", description="Queue is closed.", color=0x525768)
             return embed
+        capacity = f"{len(r['queue'])}/{self.maxQueue}"
+        tester_capacity = f"{len(r['testers'])}/{self.maxTesters}"
         queue_lines = [f"{i+1}. <@{e['user_id']}> ({e['ign']})" + (f" [{e['gamemode']}]" if e['gamemode'] else "") for i, e in enumerate(r["queue"])]
         tester_lines = [f"{i+1}. <@{uid}>" for i, uid in enumerate(r["testers"])]
         embed = discord.Embed(title=f"{region} Queue", color=0xff4500)
-        embed.add_field(name="In Queue", value="\n".join(queue_lines) or "None", inline=True)
-        embed.add_field(name="Testers", value="\n".join(tester_lines) or "None", inline=True)
+        embed.add_field(name=f"In Queue ({capacity})", value="\n".join(queue_lines) or "None", inline=True)
+        embed.add_field(name=f"Testers ({tester_capacity})", value="\n".join(tester_lines) or "None", inline=True)
         embed.set_footer(text=f"{len(r['queue'])} waiting · {len(r['testers'])} testing")
         return embed
 
@@ -558,21 +576,10 @@ class MagmaBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
     async def setup_hook(self):
         await self.tree.sync()
-        for q in db_mgr.queues.find({"message_id": {"$ne": None}, "status": {"$in": ["waiting", "claimed"]}}):
-            status = q.get("status", "waiting")
-            claimed_by = q.get("claimed_by")
-            self.add_view(QueueView(status=status, claimed_by=claimed_by), message_id=q["message_id"])
-        status_doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
-        if status_doc and status_doc.get("message_id"):
-            self.add_view(JoinQueueView(), message_id=status_doc["message_id"])
-        for p in db_mgr.partners.find({"message_id": {"$ne": None}, "status": "Pending Review"}):
-            try:
-                self.add_view(PartnerView(str(p["_id"]), PARTNER_CHANNEL_ID), message_id=p["message_id"])
-            except Exception:
-                pass
         self.add_view(EnterQueueView())
         self.add_view(VerifyIGNView())
-        refresh_queue_status.start()
+        self.add_view(WaitlistButton())
+        self.add_view(CloseTicketButton())
         refresh_region_queues.start()
 
     async def on_ready(self):
@@ -614,6 +621,19 @@ class MagmaBot(discord.Client):
                 color=0x5865F2,
             )
             await verify_chan.send(embed=verify_embed, view=VerifyIGNView())
+
+        # Send waitlist entry button
+        waitlist_chan = self.get_channel(QUEUE_CHANNEL_ID)
+        if waitlist_chan:
+            async for msg in waitlist_chan.history(limit=5):
+                if msg.author == self.user:
+                    await msg.delete()
+            waitlist_embed = discord.Embed(
+                title="Join the Testing Waitlist",
+                description="Click the button below to join the testing waitlist. You'll need to provide your Minecraft IGN, region, and preferred server.\n\nAlready registered? Just use the **Enter Queue** button in your gamemode channel!",
+                color=0x5865F2,
+            )
+            await waitlist_chan.send(embed=waitlist_embed, view=WaitlistButton())
 
 bot = MagmaBot()
 
@@ -660,26 +680,6 @@ class GamemodeRoleDropdownView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(GamemodeRoleDropdown())
 
-@bot.tree.command(name="gamemoderoles", description="Select your gamemode roles!")
-async def gamemoderoles(interaction: discord.Interaction):
-    """Send a message with all gamemodes to select roles."""
-    embed = discord.Embed(title="Select Your Gamemode Roles", description="Choose one or more gamemodes from the dropdown to add/remove roles.", color=0x5865F2)
-    for gm, role_id in GAMEMODE_ROLE_IDS.items():
-        role_mention = f"<@&{role_id}>"
-        embed.add_field(name=gm, value=role_mention, inline=True)
-    await interaction.response.send_message(embed=embed, view=GamemodeRoleDropdownView(), ephemeral=True)
-
-@tasks.loop(seconds=30)
-async def refresh_queue_status():
-    try:
-        await _refresh_queue_channel(bot)
-    except Exception:
-        pass
-    try:
-        await _send_or_edit_status()
-    except Exception:
-        pass
-
 @tasks.loop(seconds=30)
 async def refresh_region_queues():
     # Update gamemode channel embeds
@@ -716,434 +716,22 @@ async def refresh_region_queues():
         except Exception:
             pass
 
-@bot.tree.command(name="rank")
-async def rank(interaction: discord.Interaction, player: str, discord_user: discord.Member, mode: str, tier: str, region: str, reason: str):
-    if is_bot_offline():
-        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
-    if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("No permission", ephemeral=True)
 
 
-    t_up = tier.upper().strip()
-    existing = db_mgr.players.find_one({"username": player, "gamemode": mode})
-    old_tier = existing.get("tier") if existing else None
-    old_value = get_tier_value(old_tier) if old_tier else 0
-    new_value = get_tier_value(t_up)
-
-    status = "promoted" if new_value > old_value else "demoted" if new_value < old_value else "updated"
-
-    # peak_tier only ever goes up — never replaced with a lower tier
-    existing_peak = existing.get("peak_tier") if existing else None
-    new_peak = t_up if (existing_peak is None or new_value > get_tier_value(existing_peak)) else existing_peak
-
-    db_mgr.players.update_one(
-        {"username": player, "gamemode": mode},
-        {"$set": {
-            "tier": t_up,
-            "peak_tier": new_peak,
-            "region": region.upper(),
-            "discord_id": discord_user.id,
-            "tester": interaction.user.id,
-            "retired": False,
-            "banned": False,
-            "ts": datetime.datetime.utcnow()
-        }},
-        upsert=True
-    )
-
-    await log_action(
-        "TIER UPDATE",
-        f"{discord_user.mention} {player} {status} to {t_up} {mode}",
-        interaction,
-        public=True,
-        hide_action=True,
-    )
-
-    await interaction.response.send_message("Updated!", ephemeral=True)
-
-@bot.tree.command(name="check")
-async def check(interaction: discord.Interaction, player: str = None):
-    if is_bot_offline():
-        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
-
-    searched_by_discord = False
-
-    if player is None:
-        records = list(db_mgr.players.find({"discord_id": interaction.user.id, "banned": {"$ne": True}}))
-        if not records:
-            return await interaction.response.send_message("No tiers found for your account.", ephemeral=True)
-        searched_by_discord = True
-    elif player.isdigit():
-        records = list(db_mgr.players.find({"discord_id": int(player), "banned": {"$ne": True}}))
-        searched_by_discord = True
-    else:
-        records = list(db_mgr.players.find({"username": player, "banned": {"$ne": True}}))
-
-    if not records:
-        return await interaction.response.send_message(f"**{player}** not found.", ephemeral=True)
-
-    # Fetch the Discord member if we have a discord_id
-    linked_discord = None
-    discord_id_val = records[0].get("discord_id")
-    if discord_id_val:
-        guild = interaction.guild
-        if guild:
-            try:
-                linked_discord = await guild.fetch_member(discord_id_val)
-            except:
-                pass
-
-    tiers = []
-    regions = set()
-    peak_tier = ""
-    peak_value = 0
-    mode_tiers = {}
-
-    for r in records:
-        if r.get("retired"):
-            continue
-        t = normalize_tier(r.get("tier"))
-        tiers.append(t)
-        regions.add(r.get("region", "NA").strip().upper())
-        p = normalize_tier(r.get("peak_tier") or t)
-        pv = get_tier_value(p)
-        if pv > peak_value:
-            peak_value = pv
-            peak_tier = p
-        gm = normalize_mode(r.get("gamemode"))
-        tv = get_tier_value(t)
-        if gm not in mode_tiers or tv > mode_tiers[gm]["value"]:
-            mode_tiers[gm] = {"tier": t, "value": tv}
-
-    if not tiers:
-        return await interaction.response.send_message(f"**{player}** has no active tiers.", ephemeral=True)
-
-    player_score = sum(get_tier_value(t) for t in tiers)
-    rank_name, rank_color = get_rank_info(tiers)
-
-    # Calculate global position
-    all_raw = list(db_mgr.players.find({"banned": {"$ne": True}}))
-    user_scores = {}
-    for r in all_raw:
-        if r.get("retired"):
-            continue
-        u = r["username"]
-        ut = normalize_tier(r.get("tier"))
-        if u not in user_scores:
-            user_scores[u] = 0
-        user_scores[u] += get_tier_value(ut)
-
-    sorted_players = sorted(user_scores.items(), key=lambda x: -x[1])
-    usernames = list(dict.fromkeys(r["username"] for r in records))
-    main_username = usernames[0]
-    position = next((i + 1 for i, (u, _) in enumerate(sorted_players) if u.lower() == main_username.lower()), None)
-
-    region = ", ".join(sorted(regions)) if regions else "N/A"
-    best_mode = max(mode_tiers, key=lambda m: mode_tiers[m]["value"]) if mode_tiers else "N/A"
-    best_tier = mode_tiers[best_mode]["tier"] if best_mode != "N/A" else "N/A"
-
-    title = main_username
-    if linked_discord:
-        title += f" ({linked_discord})"
-    elif searched_by_discord:
-        title += " (Unknown Discord)"
-
-    embed = discord.Embed(title=title, color=discord.Color(int(rank_color.replace("#", ""), 16)))
-    position_str = f"#{position}" if position else "Unranked"
-    embed.add_field(name="Global Position", value=position_str, inline=True)
-    embed.add_field(name="Peak Tier", value=peak_tier or "N/A", inline=True)
-    embed.add_field(name="Region", value=region, inline=True)
-    embed.add_field(name=f"Best Tier ({best_mode})", value=best_tier, inline=True)
-
-    if len(usernames) > 1:
-        embed.add_field(name="Usernames", value="\n".join(usernames), inline=False)
-
-    modes_list = "\n".join(f"{m}: {d['tier']}" for m, d in sorted(mode_tiers.items(), key=lambda x: -x[1]["value"]))
-    embed.add_field(name="All Modes", value=modes_list or "N/A", inline=False)
-
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="control")
-async def control(interaction: discord.Interaction, player: str):
-    if is_bot_offline():
-        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
-
-    records = list(db_mgr.players.find({"username": player, "banned": {"$ne": True}}))
-    if not records:
-        return await interaction.response.send_message(f"**{player}** not found.", ephemeral=True)
-
-    lines = []
-    for r in records:
-        if r.get("retired"):
-            continue
-        gm = r.get("gamemode", "?")
-        tier = r.get("tier", "?")
-        tester_id = r.get("tester")
-        ts = r.get("ts")
-        tester_str = f"<@{tester_id}>" if tester_id else "Unknown"
-        time_str = ts.strftime("%Y-%m-%d") if isinstance(ts, datetime.datetime) else "?"
-        lines.append(f"{gm}: **{tier}** — tested by {tester_str} ({time_str})")
-
-    if not lines:
-        return await interaction.response.send_message(f"**{player}** has no active records.", ephemeral=True)
-
-    embed = discord.Embed(title=f"Control — {player}", color=0xff4500)
-    embed.description = "\n".join(lines)
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="maintenance")
-async def maintenance(interaction: discord.Interaction, action: str, reason: str = None):
-    if is_bot_offline():
-        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
-    if not interaction.user.guild_permissions.manage_roles:
-        return
 
 
-    action_lower = action.lower()
-    if action_lower == "on":
-        db_mgr.settings.update_one(
-            {"_id": "maintenance_mode"},
-            {"$set": {"active": True, "reason": reason or "Maintenance in progress"}},
-            upsert=True
-        )
-        await interaction.response.send_message("Maintenance mode enabled", ephemeral=True)
-    elif action_lower == "off":
-        db_mgr.settings.update_one(
-            {"_id": "maintenance_mode"},
-            {"$set": {"active": False}},
-            upsert=True
-        )
-        await interaction.response.send_message("Maintenance mode disabled", ephemeral=True)
-    else:
-        await interaction.response.send_message("Use 'on' or 'off' for action", ephemeral=True)
-
-@bot.tree.command(name="retire")
-async def retire(interaction: discord.Interaction, player: str):
-    if not interaction.user.guild_permissions.manage_roles: return
-    result = db_mgr.players.update_many(
-        {"username": player},
-        {"$set": {"retired": True, "ts": datetime.datetime.utcnow()}}
-    )
-    msg = f"Retired {player}" if result.modified_count > 0 else f"Player {player} not found"
-    await log_action("RETIRE", f"Player: {player}\nResult: {'Retired' if result.modified_count > 0 else 'Not found'}", interaction)
-    await interaction.response.send_message(msg, ephemeral=True)
-
-@bot.tree.command(name="ban")
-async def ban(interaction: discord.Interaction, player: str):
-    if not interaction.user.guild_permissions.manage_roles: return
-    result = db_mgr.players.update_many(
-        {"username": player},
-        {"$set": {"banned": True, "ts": datetime.datetime.utcnow()}}
-    )
-    msg = f"Banned {player}" if result.modified_count > 0 else f"Player {player} not found"
-    await log_action("BAN", f"Player: {player}\nResult: {'Banned' if result.modified_count > 0 else 'Not found'}", interaction)
-    await interaction.response.send_message(msg, ephemeral=True)
 
 
-@bot.tree.command(name="fail")
-async def fail(interaction: discord.Interaction, player: str, tier: str, mode: str):
-    if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("No permission", ephemeral=True)
-    await log_action(
-        "FAIL",
-        f"**{player}** failed {tier.upper().strip()} {mode}",
-        interaction,
-        public=True,
-        hide_action=True,
-    )
-    await interaction.response.send_message("Logged!", ephemeral=True)
+
+
+
+
 
 # --- QUEUE SYSTEM ---
 def _get_tester_profiles():
     return list(db_mgr.tester_profiles.find({"online": True}))
 
-def _build_entry_embed(n_mode, player, region_u, queued_by, server=None):
-    embed = discord.Embed(title=n_mode, color=0xff4500)
-    embed.add_field(name="Player", value=player, inline=True)
-    embed.add_field(name="Region", value=region_u, inline=True)
-    embed.add_field(name="Queued By", value=queued_by, inline=True)
-    if server:
-        embed.add_field(name="Recommended Server", value=server, inline=True)
-    embed.set_footer(text="1 in queue")
-    return embed
 
-
-class ClaimModal(discord.ui.Modal, title="Claim Queue"):
-    def __init__(self, queue_entry):
-        super().__init__()
-        self.queue_entry = queue_entry
-        self.server = discord.ui.TextInput(label="Recommended Server", placeholder="e.g. 0.0.0.0:25565", required=True, max_length=100)
-        self.add_item(self.server)
-        self.add_item(discord.ui.TextInput(label="Gamemode", default=queue_entry["gamemode"], required=True, max_length=20))
-        self.add_item(discord.ui.TextInput(label="Region", default=queue_entry["region"], required=True, max_length=5))
-
-    async def on_submit(self, interaction: discord.Interaction):
-        server = self.children[0].value
-        gamemode = self.children[1].value
-        region = self.children[2].value
-        q = self.queue_entry
-        db_mgr.queues.update_one({"_id": q["_id"]}, {"$set": {"status": "claimed", "claimed_by": interaction.user.id}})
-
-        player_doc = db_mgr.players.find_one({"username": q["username"]})
-        dm_ok = False
-        if player_doc and player_doc.get("discord_id"):
-            try:
-                member = interaction.guild.get_member(player_doc["discord_id"]) if interaction.guild else None
-                if member:
-                    dm_embed = discord.Embed(title="Your queue has been claimed!", color=0x34d399)
-                    dm_embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
-                    dm_embed.add_field(name="Gamemode", value=gamemode, inline=True)
-                    dm_embed.add_field(name="Region", value=region, inline=True)
-                    dm_embed.add_field(name="Server", value=server, inline=False)
-                    await member.send(embed=dm_embed)
-                    dm_ok = True
-            except discord.Forbidden:
-                pass
-            except Exception:
-                pass
-
-        embed = interaction.message.embeds[0]
-        embed.color = 0x34d399
-        embed.clear_fields()
-        embed.add_field(name="Player", value=q["username"], inline=True)
-        embed.add_field(name="Gamemode", value=gamemode, inline=True)
-        embed.add_field(name="Region", value=region, inline=True)
-        embed.add_field(name="Server", value=server, inline=True)
-        embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Status", value="Claimed ✅", inline=True)
-        embed.set_footer(text=f"Claimed by {interaction.user}")
-        new_view = QueueView(status="claimed", claimed_by=interaction.user.id)
-        await interaction.response.edit_message(embed=embed, view=new_view)
-
-        try:
-            category = interaction.guild.get_channel(PARTNER_CATEGORY_ID) if interaction.guild else None
-            if category and isinstance(category, discord.CategoryChannel):
-                player_discord_id = None
-                if player_doc and player_doc.get("discord_id"):
-                    player_discord_id = player_doc["discord_id"]
-                elif q.get("discord_id"):
-                    player_discord_id = q["discord_id"]
-                player_member = interaction.guild.get_member(player_discord_id) if player_discord_id else None
-                overwrites = {
-                    interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                    interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                }
-                if player_member:
-                    overwrites[player_member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                overwrites[interaction.user] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                safe_name = q["username"].replace(" ", "-").lower()[:20]
-                chan = await category.create_text_channel(f"test-{safe_name}-{gamemode.lower()[:5]}", overwrites=overwrites)
-                await chan.send(
-                    f"**Test Session**\nPlayer: {q['username']} {player_member.mention if player_member else ''}\n"
-                    f"Tester: {interaction.user.mention}\nGamemode: {gamemode}\nRegion: {region}\nServer: {server}"
-                )
-                db_mgr.queues.update_one({"_id": q["_id"]}, {"$set": {"test_channel_id": chan.id}})
-        except Exception:
-            pass
-
-        await _refresh_queue_channel(interaction.client)
-        try:
-            await _send_or_edit_status()
-        except Exception:
-            pass
-        notif = interaction.client.get_channel(TESTER_NOTIF_CHANNEL_ID)
-        if notif:
-            n_embed = discord.Embed(title="Claimed", color=0x34d399)
-            n_embed.add_field(name="Player", value=q["username"], inline=True)
-            n_embed.add_field(name="Gamemode", value=gamemode, inline=True)
-            n_embed.add_field(name="Region", value=region, inline=True)
-            n_embed.add_field(name="Server", value=server, inline=True)
-            n_embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
-            await notif.send(embed=n_embed)
-
-        msg = f"Claimed **{q['username']}** for {gamemode} on {server}."
-        if not dm_ok:
-            msg += " ⚠️ Could not DM the player (DMs closed or no Discord linked)."
-        await interaction.followup.send(msg, ephemeral=True)
-
-
-class QueueView(discord.ui.View):
-    def __init__(self, status="waiting", claimed_by=None):
-        super().__init__(timeout=None)
-        for child in self.children:
-            if child.custom_id == "queue_claim":
-                child.disabled = (status != "waiting")
-            elif child.custom_id == "queue_tier":
-                child.disabled = (status != "claimed")
-            elif child.custom_id == "queue_done":
-                child.disabled = (status != "claimed")
-
-    @discord.ui.button(label="Claim Queue", style=discord.ButtonStyle.primary, custom_id="queue_claim")
-    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
-        q = db_mgr.queues.find_one({"message_id": interaction.message.id, "channel_id": interaction.channel_id})
-        if not q or q["status"] != "waiting":
-            return await interaction.response.send_message("Already claimed or not found.", ephemeral=True)
-        if not interaction.user.guild_permissions.manage_roles:
-            return await interaction.response.send_message("No permission.", ephemeral=True)
-        await interaction.response.send_modal(ClaimModal(q))
-
-    @discord.ui.button(label="Tier", style=discord.ButtonStyle.secondary, custom_id="queue_tier")
-    async def tier(self, interaction: discord.Interaction, button: discord.ui.Button):
-        q = db_mgr.queues.find_one({"message_id": interaction.message.id, "channel_id": interaction.channel_id})
-        if not q or q["status"] != "claimed":
-            return await interaction.response.send_message("Claim the queue first.", ephemeral=True)
-        await interaction.response.send_modal(TierModal(q))
-
-    @discord.ui.button(label="Done", style=discord.ButtonStyle.success, custom_id="queue_done")
-    async def done(self, interaction: discord.Interaction, button: discord.ui.Button):
-        q = db_mgr.queues.find_one({"message_id": interaction.message.id, "channel_id": interaction.channel_id})
-        if not q or q["status"] != "claimed":
-            return await interaction.response.send_message("Not in claimed state.", ephemeral=True)
-        if interaction.user.id != q.get("claimed_by") and not interaction.user.guild_permissions.manage_roles:
-            return await interaction.response.send_message("Only the claiming tester can mark as done.", ephemeral=True)
-        db_mgr.queues.update_one({"_id": q["_id"]}, {"$set": {"status": "completed"}})
-        embed = interaction.message.embeds[0]
-        embed.color = 0x6b7280
-        embed.clear_fields()
-        embed.add_field(name="Player", value=q["username"], inline=True)
-        embed.add_field(name="Gamemode", value=q["gamemode"], inline=True)
-        embed.add_field(name="Region", value=q["region"], inline=True)
-        embed.add_field(name="Tester", value=f"<@{q['claimed_by']}>", inline=True)
-        embed.add_field(name="Status", value="Completed ✅", inline=True)
-        embed.set_footer(text="")
-        new_view = QueueView(status="completed")
-        for child in new_view.children:
-            child.disabled = True
-        await interaction.response.edit_message(embed=embed, view=new_view)
-        await _refresh_queue_channel(interaction.client)
-        try:
-            await _send_or_edit_status()
-        except Exception:
-            pass
-
-    @discord.ui.button(label="More Info", style=discord.ButtonStyle.secondary, custom_id="queue_info")
-    async def info(self, interaction: discord.Interaction, button: discord.ui.Button):
-        q = db_mgr.queues.find_one({"message_id": interaction.message.id, "channel_id": interaction.channel_id})
-        if not q:
-            return await interaction.response.send_message("Queue entry not found.", ephemeral=True)
-        player = q["username"]
-        records = list(db_mgr.players.find({"username": player, "banned": {"$ne": True}}))
-        if not records:
-            return await interaction.response.send_message(f"No tier data for **{player}**.", ephemeral=True)
-        tiers, regions, peak_tier, peak_value, mode_tiers = [], set(), "", 0, {}
-        for r in records:
-            if r.get("retired"): continue
-            t = normalize_tier(r.get("tier"))
-            tiers.append(t); regions.add(r.get("region", "NA").strip().upper())
-            p = normalize_tier(r.get("peak_tier") or t)
-            pv = get_tier_value(p)
-            if pv > peak_value: peak_value, peak_tier = pv, p
-            gm = normalize_mode(r.get("gamemode")); tv = get_tier_value(t)
-            if gm not in mode_tiers or tv > mode_tiers[gm]["value"]:
-                mode_tiers[gm] = {"tier": t, "value": tv}
-        rank_name, rank_color = get_rank_info(tiers)
-        e = discord.Embed(title=f"Info — {player}", color=discord.Color(int(rank_color.replace("#", ""), 16)))
-        e.add_field(name="Rank", value=rank_name, inline=True)
-        e.add_field(name="Peak Tier", value=peak_tier or "N/A", inline=True)
-        e.add_field(name="Region", value=", ".join(sorted(regions)) or "N/A", inline=True)
-        modes_list = "\n".join(f"{m}: {d['tier']}" for m, d in sorted(mode_tiers.items(), key=lambda x: -x[1]["value"]))
-        e.add_field(name="Tiers", value=modes_list or "N/A", inline=False)
-        await interaction.response.send_message(embed=e, ephemeral=True)
 
 
 class VerifyIGNModal(discord.ui.Modal, title="Verify Your IGN"):
@@ -1433,285 +1021,15 @@ async def next_in_queue(interaction: discord.Interaction):
     await _update_region_queue_embed(region_u)
 
 
-def _update_queue_channel():
-    testers = _get_tester_profiles()
-    waiting = sorted(db_mgr.queues.find({"status": "waiting"}), key=lambda x: x.get("ts") or datetime.datetime.min)
-
-    embed = discord.Embed(title="Magmatiers Testing Queue", color=0xff4500)
-    for mode in MODES:
-        online = [t for t in testers if mode in t.get("gamemodes", [])]
-        if online:
-            names = ", ".join(f"<@{t['discord_id']}>" for t in online)
-            embed.add_field(name=f"\U0001f7e2 {mode}", value=names, inline=True)
-        else:
-            embed.add_field(name=f"\U0001f534 {mode}", value="No testers online", inline=True)
-
-    lines = []
-    for w in waiting[:10]:
-        lines.append(f"• {w['username']} — {w['gamemode']} ({w['region']})")
-    if len(waiting) > 10:
-        lines.append(f"• +{len(waiting) - 10} more")
-    if not lines:
-        lines = ["• None"]
-
-    embed.add_field(name=f"Waiting ({len(waiting)})", value="\n".join(lines), inline=True)
-
-    if not testers:
-        eta = "No testers available"
-    elif not waiting:
-        eta = "No queue"
-    else:
-        mins = max(5, (len(waiting) // max(len(testers), 1)) * 12)
-        eta = f"~{mins} min"
-    embed.add_field(name="Est. Wait", value=eta, inline=True)
-    embed.set_footer(text=f"{len(testers)} tester{'s' if len(testers) != 1 else ''} online")
-    return embed
-
-async def _refresh_queue_channel(bot_client):
-    try:
-        q_embed = _update_queue_channel()
-        channel = bot_client.get_channel(QUEUE_CHANNEL_ID)
-        if not channel:
-            return
-        doc = db_mgr.settings.find_one({"_id": "queue_status_msg"})
-        if doc and doc.get("message_id"):
-            try:
-                msg = await channel.fetch_message(doc["message_id"])
-                await msg.edit(embed=q_embed)
-                return
-            except Exception:
-                pass
-        # Delete any old status messages and send fresh
-        async for old in channel.history(limit=30):
-            if old.author.id == bot_client.user.id and old.embeds and old.embeds[0].title == "Magmatiers Testing Queue":
-                await old.delete()
-        msg = await channel.send(embed=q_embed, view=JoinQueueView())
-        db_mgr.settings.update_one({"_id": "queue_status_msg"}, {"$set": {"message_id": msg.id}}, upsert=True)
-    except Exception:
-        pass
-
-def _update_status_channel():
-    waiting = sorted(db_mgr.queues.find({"status": "waiting"}), key=lambda x: x.get("ts") or datetime.datetime.min)
-    total = len(waiting)
-    mode_counts = {}
-    for q in waiting:
-        mode_counts[q["gamemode"]] = mode_counts.get(q["gamemode"], 0) + 1
-    modes_str = ", ".join(f"{gm}: {n}" for gm, n in sorted(mode_counts.items())) or "None"
-
-    closed = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
-    closed_modes = closed.get("modes", []) if closed else []
-
-    lines = []
-    for q in waiting[:15]:
-        lines.append(f"• {q['username']} — {q['gamemode']} ({q['region']})")
-    if len(waiting) > 15:
-        lines.append(f"• +{len(waiting) - 15} more")
-    if not lines:
-        lines = ["• None"]
-
-    testers = _get_tester_profiles()
-    embed = discord.Embed(title="Queue Status", color=0xf59e0b)
-    embed.add_field(name="Active Queues", value=modes_str, inline=True)
-    embed.add_field(name="Total Waiting", value=str(total), inline=True)
-    embed.add_field(name="Online Testers", value=str(len(testers)), inline=True)
-    if closed_modes:
-        embed.add_field(name="Closed", value=", ".join(closed_modes), inline=True)
-    embed.add_field(name="Waiting List", value="\n".join(lines), inline=True)
-
-    # Service status
-    status_doc = db_mgr.settings.find_one({"_id": "offline_mode"})
-    service_status = status_doc.get("services", {}) if status_doc else {}
-    status_lines = []
-    for service in ["web", "bot", "database", "partner"]:
-        state = service_status.get(service, False)
-        status_lines.append(f"{service.title()}: {'❌ Down' if state else '✅ Up'}")
-    embed.add_field(name="Service Status", value="\n".join(status_lines), inline=False)
-
-    embed.set_footer(text=f"Updated just now")
-    return embed
-
-async def _send_or_edit_status():
-    embed = _update_status_channel()
-    channel = bot.get_channel(STATUS_CHANNEL_ID)
-    if not channel:
-        return
-    doc = db_mgr.settings.find_one({"_id": "status_msg_id"})
-    if doc and doc.get("message_id"):
-        try:
-            msg = await channel.fetch_message(doc["message_id"])
-            await msg.edit(embed=embed)
-            return
-        except Exception:
-            pass
-    msg = await channel.send(embed=embed)
-    db_mgr.settings.update_one({"_id": "status_msg_id"}, {"$set": {"message_id": msg.id}}, upsert=True)
 
 
 
-class JoinQueueModal(discord.ui.Modal, title="Join Queue"):
-    def __init__(self):
-        super().__init__()
-        self.ign_input = discord.ui.TextInput(label="IGN", placeholder="Your Minecraft username", required=False, max_length=30)
-        self.gamemode_input = discord.ui.TextInput(label="Gamemode", placeholder="e.g. Crystal, UHC, Pot", required=True, max_length=20)
-        self.server_input = discord.ui.TextInput(label="Server IP (optional)", placeholder="e.g. 0.0.0.0:25565", required=False, max_length=100)
-        self.add_item(self.ign_input)
-        self.add_item(self.gamemode_input)
-        self.add_item(self.server_input)
-
-    @property
-    def selected_gamemode(self):
-        # Helper to get the selected gamemode (for dropdown pre-fill)
-        return self.gamemode_input.default or self.gamemode_input.value
-
-    async def on_submit(self, interaction: discord.Interaction):
-        gamemode = self.gamemode_input.value.strip()
-        server = self.server_input.value.strip() or None
-
-        n_mode = normalize_mode(gamemode)
-        if n_mode not in MODES:
-            return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
-        if _is_gamemode_closed(n_mode):
-            return await interaction.response.send_message(f"**{n_mode}** is currently closed in the queue.", ephemeral=True)
-
-        cooldown = _check_queue_cooldown(interaction.user.id)
-        if cooldown:
-            return await interaction.response.send_message(f"You're already in queue for {cooldown}", ephemeral=True)
-
-        # Detect region from roles
-        region = None
-        if interaction.guild and isinstance(interaction.user, discord.Member):
-            for rcode, rid in REGION_ROLE_IDS.items():
-                role = interaction.guild.get_role(rid)
-                if role and role in interaction.user.roles:
-                    region = rcode
-                    break
-        if not region:
-            return await interaction.response.send_message(
-                "You need a region role (EU, NA, AF, AS, OC) to queue. Ask a staff member to assign one.",
-                ephemeral=True,
-            )
-
-        # Only ask for IGN if not tested before
-        ign = self.ign_input.value.strip()
-        player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id})
-        if not ign and player_doc:
-            ign = player_doc.get("username", "")
-        if not ign:
-            return await interaction.response.send_message("IGN required (not found in your previous records)", ephemeral=True)
-
-        # Block banned IGNs
-        banned_doc = db_mgr.players.find_one({"username": ign, "banned": True})
-        if banned_doc:
-            return await interaction.response.send_message("This IGN is banned from queuing.", ephemeral=True)
-
-        # Assign region role to user
-        region_role_id = REGION_ROLE_IDS.get(region)
-        if region_role_id:
-            guild = interaction.guild
-            if guild:
-                region_role = guild.get_role(region_role_id)
-                if region_role and region_role not in interaction.user.roles:
-                    try:
-                        await interaction.user.add_roles(region_role, reason="Queued for region")
-                    except Exception:
-                        pass
-
-        # Assign gamemode role to user
-        gamemode_role_id = GAMEMODE_ROLE_IDS.get(n_mode)
-        if gamemode_role_id:
-            guild = interaction.guild
-            if guild:
-                gm_role = guild.get_role(gamemode_role_id)
-                if gm_role and gm_role not in interaction.user.roles:
-                    try:
-                        await interaction.user.add_roles(gm_role, reason="Queued for gamemode")
-                    except Exception:
-                        pass
-
-        entry = {
-            "username": ign, "discord_id": interaction.user.id,
-            "gamemode": n_mode, "region": region,
-            "status": "waiting", "claimed_by": None,
-            "message_id": None, "channel_id": CLAIM_CHANNEL_ID,
-            "ts": datetime.datetime.utcnow(),
-        }
-        queue_id = db_mgr.queues.insert_one(entry).inserted_id
-
-        # Calculate queue position
-        position = db_mgr.queues.count_documents({
-            "gamemode": n_mode, "status": "waiting", "ts": {"$lt": entry["ts"]}
-        }) + 1
-
-        # Send queue entry with buttons to claim channel
-        channel_id = GAMEMODE_REGION_CHANNEL_IDS.get((n_mode, region)) or CLAIM_CHANNEL_ID
-        claim_channel = interaction.client.get_channel(channel_id)
-        if claim_channel:
-            entry_embed = _build_entry_embed(n_mode, ign, region, interaction.user.mention, server=server)
-            view = QueueView(status="waiting")
-            ping_str = f"<@&{gamemode_role_id}>" if gamemode_role_id else ""
-            msg = await claim_channel.send(content=ping_str, embed=entry_embed, view=view)
-            db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
-
-        await _refresh_queue_channel(interaction.client)
-        try:
-            await _send_or_edit_status()
-        except Exception:
-            pass
-
-        await interaction.response.send_message(
-            f"Queued **{ign}** for {n_mode} ({region}). Position: **#{position}**" + (f"\nServer: {server}" if server else ""),
-            ephemeral=True,
-        )
 
 
 
-# --- GAMEMODE DROPDOWN FOR QUEUE ---
-class QueueGamemodeDropdown(discord.ui.Select):
-    def __init__(self, closed_modes=None):
-        closed_modes = closed_modes or []
-        options = [
-            discord.SelectOption(
-                label=mode,
-                value=mode,
-                description=("Closed" if mode in closed_modes else None),
-                default=False,
-                emoji=None,
-                ) for mode in MODES
-        ]
-        super().__init__(
-            placeholder="Select gamemode...",
-            min_values=1,
-            max_values=1,
-            options=options,
-            custom_id="queue_gamemode_dropdown"
-        )
-        self.closed_modes = closed_modes
-
-    async def callback(self, interaction: discord.Interaction):
-        selected_mode = self.values[0]
-        if selected_mode in self.closed_modes:
-            await interaction.response.send_message(f"**{selected_mode}** is currently closed in the queue.", ephemeral=True)
-            return
-        # Open the modal with the selected gamemode pre-filled
-        modal = JoinQueueModal()
-        modal.gamemode_input.default = selected_mode
-        await interaction.response.send_modal(modal)
 
 
-class JoinQueueView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        # Get closed gamemodes from DB
-        closed_doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
-        closed_modes = closed_doc.get("modes", []) if closed_doc else []
-        self.add_item(QueueGamemodeDropdown(closed_modes=closed_modes))
-        # Add a disabled join button for visual clarity (not used for action)
-        self.add_item(discord.ui.Button(
-            label="Join Queue",
-            style=discord.ButtonStyle.primary,
-            custom_id="join_queue_disabled",
-            disabled=True
-        ))
+
 
 
 class PartnerView(discord.ui.View):
@@ -1769,116 +1087,11 @@ class PartnerView(discord.ui.View):
         await self._update(interaction, "Declined ❌", 0xf87171)
 
 
-@bot.tree.command(name="partner")
-async def partner_cmd(interaction: discord.Interaction, action: str, submission_id: str):
-    """Review partner submissions (staff only)"""
-    if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("No permission.", ephemeral=True)
-    action = action.lower().strip()
-    if action not in ("accept", "approve", "decline", "deny"):
-        return await interaction.response.send_message("Use: accept or decline", ephemeral=True)
-    doc = db_mgr.partners.find_one({"_id": ObjectId(submission_id)})
-    if not doc:
-        return await interaction.response.send_message("Submission not found.", ephemeral=True)
-    new_status = "Approved ✅" if action in ("accept", "approve") else "Declined ❌"
-    color = 0x34d399 if action in ("accept", "approve") else 0xf87171
-    db_mgr.partners.update_one({"_id": ObjectId(submission_id)}, {"$set": {"status": new_status}})
-    if "Approved" in new_status and doc.get("discord_id"):
-        try:
-            category = interaction.guild.get_channel(PARTNER_CATEGORY_ID) if interaction.guild else None
-            if category and isinstance(category, discord.CategoryChannel):
-                ign = doc.get("ign", "partner")
-                member = interaction.guild.get_member(doc["discord_id"])
-                overwrites = {
-                    interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                    interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                }
-                if member:
-                    overwrites[member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                chan = await category.create_text_channel(f"partner-{ign}", overwrites=overwrites)
-                await chan.send(f"Welcome {member.mention if member else doc.get('discord_user', '')}! Your partner application has been approved.")
-                db_mgr.partners.update_one({"_id": ObjectId(submission_id)}, {"$set": {"channel_id": chan.id}})
-        except Exception:
-            pass
-    await interaction.response.send_message(f"Submission **{submission_id}** → {new_status}", ephemeral=True)
 
 
 
-@bot.tree.command(name="queue")
-async def queue_cmd(interaction: discord.Interaction, player: str, gamemode: str, region: str):
-    """Queue a player for testing (uses roles for region/gamemode)"""
-    if is_bot_offline():
-        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
-    n_mode = normalize_mode(gamemode)
-    if n_mode not in MODES:
-        return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
-    region_u = region.upper().strip()
-    if region_u not in REGION_ROLE_IDS:
-        return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_ROLE_IDS.keys())}", ephemeral=True)
-    if _is_gamemode_closed(n_mode):
-        return await interaction.response.send_message(f"**{n_mode}** is currently closed in the queue.", ephemeral=True)
 
-    cooldown = _check_queue_cooldown(interaction.user.id)
-    if cooldown:
-        return await interaction.response.send_message(f"You're already in queue for {cooldown}", ephemeral=True)
 
-    # Block banned IGNs
-    banned_doc = db_mgr.players.find_one({"username": player, "banned": True})
-    if banned_doc:
-        return await interaction.response.send_message("This IGN is banned from queuing.", ephemeral=True)
-
-    # Assign region role to user
-    region_role_id = REGION_ROLE_IDS.get(region_u)
-    if region_role_id:
-        guild = interaction.guild
-        if guild:
-            region_role = guild.get_role(region_role_id)
-            if region_role and region_role not in interaction.user.roles:
-                try:
-                    await interaction.user.add_roles(region_role, reason="Queued for region")
-                except Exception:
-                    pass
-
-    # Assign gamemode role to user (optional)
-    gamemode_role_id = GAMEMODE_ROLE_IDS.get(n_mode)
-    if gamemode_role_id:
-        guild = interaction.guild
-        if guild:
-            gm_role = guild.get_role(gamemode_role_id)
-            if gm_role and gm_role not in interaction.user.roles:
-                try:
-                    await interaction.user.add_roles(gm_role, reason="Queued for gamemode")
-                except Exception:
-                    pass
-
-    entry = {
-        "username": player, "discord_id": interaction.user.id,
-        "gamemode": n_mode, "region": region_u,
-        "status": "waiting", "claimed_by": None,
-        "message_id": None, "channel_id": CLAIM_CHANNEL_ID,
-        "ts": datetime.datetime.utcnow(),
-    }
-    queue_id = db_mgr.queues.insert_one(entry).inserted_id
-
-    # Send queue entry with buttons to claim channel
-    channel_id = GAMEMODE_REGION_CHANNEL_IDS.get((n_mode, region_u)) or CLAIM_CHANNEL_ID
-    claim_channel = bot.get_channel(channel_id)
-    if claim_channel:
-        entry_embed = _build_entry_embed(n_mode, player, region_u, interaction.user.mention)
-        # Disable claim button if gamemode is closed
-        closed_doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
-        closed_modes = closed_doc.get("modes", []) if closed_doc else []
-        view = QueueView(status="waiting" if n_mode not in closed_modes else "closed")
-        ping_str = f"<@&{gamemode_role_id}>" if gamemode_role_id else ""
-        msg = await claim_channel.send(content=ping_str, embed=entry_embed, view=view)
-        db_mgr.queues.update_one({"_id": queue_id}, {"$set": {"message_id": msg.id}})
-
-    await _refresh_queue_channel(bot)
-    try:
-        await _send_or_edit_status()
-    except Exception:
-        pass
-    await interaction.response.send_message(f"Queued **{player}** for {n_mode} ({region_u}).", ephemeral=True)
 
 
 @bot.tree.command(name="online")
@@ -1936,7 +1149,6 @@ async def tester_online(interaction: discord.Interaction, gamemodes: str):
     embed.add_field(name="Region", value=region_u, inline=True)
     embed.add_field(name="Testing", value=modes_str, inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
-    await _refresh_queue_channel(interaction.client)
 
 
 async def _update_region_queue_embed(region):
@@ -2018,7 +1230,6 @@ async def tester_offline(interaction: discord.Interaction, gamemodes: str):
             tier_queue.remove_tester(region_u, interaction.user.id)
             await _update_region_queue_embed(region_u)
         await interaction.response.send_message("You're now **offline** for all gamemodes.", ephemeral=True)
-        await _refresh_queue_channel(interaction.client)
         return
 
     parsed = set(normalize_mode(m.strip()) for m in gamemodes.split(","))
@@ -2051,89 +1262,386 @@ async def tester_offline(interaction: discord.Interaction, gamemodes: str):
             f"Went **offline** in: {', '.join(sorted(parsed))}\nStill testing: {', '.join(updated)}",
             ephemeral=True)
 
-    await _refresh_queue_channel(interaction.client)
 
 
-def _check_queue_cooldown(discord_id):
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=3)
-    entry = db_mgr.queues.find_one({
-        "discord_id": discord_id,
-        "status": {"$in": ["waiting", "claimed"]},
-        "ts": {"$gte": cutoff}
-    })
-    if entry:
-        remaining = (entry["ts"] + datetime.timedelta(hours=3)) - datetime.datetime.utcnow()
-        hours, remainder = divmod(int(remaining.total_seconds()), 3600)
-        minutes = remainder // 60
-        return f"**{entry['gamemode']}** — try again in {hours}h {minutes}m"
-    return None
-
-def _is_gamemode_closed(gamemode):
-    doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
-    return gamemode in doc.get("modes", []) if doc else False
 
 
-@bot.tree.command(name="close")
-async def close_gamemode(interaction: discord.Interaction, gamemode: str):
-    """Close a gamemode from the queue (manage_roles only)"""
+
+
+
+# --- WAITLIST (for new users) ---
+class WaitlistForm(discord.ui.Modal, title="Join the Waitlist"):
+    def __init__(self):
+        super().__init__()
+        self.ign = discord.ui.TextInput(label="Minecraft Username", placeholder="Enter your in-game name", required=True, max_length=16)
+        self.region = discord.ui.TextInput(label="Region (EU, NA, AF, AS, OC)", placeholder="Enter your region", required=True, max_length=5)
+        self.server = discord.ui.TextInput(label="Preferred Server", placeholder="Enter your preferred server", required=True, max_length=100)
+        self.add_item(self.ign)
+        self.add_item(self.region)
+        self.add_item(self.server)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ign = self.ign.value.strip()
+        region = self.region.value.strip().upper()
+        server = self.server.value.strip()
+
+        if region not in REGION_ROLE_IDS:
+            return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_ROLE_IDS.keys())}", ephemeral=True)
+
+        uuid = resolve_uuid(ign)
+        if not uuid:
+            return await interaction.response.send_message("Could not verify Minecraft username. Make sure it exists on Mojang's API.", ephemeral=True)
+
+        db_mgr.players.update_one(
+            {"discord_id": interaction.user.id},
+            {"$set": {
+                "username": ign,
+                "uuid": uuid,
+                "region": region,
+                "server": server,
+                "discord_id": interaction.user.id,
+                "ts": datetime.datetime.utcnow(),
+            }},
+            upsert=True,
+        )
+
+        region_role_id = REGION_ROLE_IDS.get(region)
+        if region_role_id and interaction.guild:
+            role = interaction.guild.get_role(region_role_id)
+            if role and role not in interaction.user.roles:
+                try:
+                    await interaction.user.add_roles(role, reason="Joined waitlist")
+                except Exception:
+                    pass
+
+        queue_channel_id = REGION_QUEUE_CHANNELS.get(region)
+        queue_mention = f"<#{queue_channel_id}>" if queue_channel_id else "your region's queue channel"
+        embed = discord.Embed(title="Welcome to the Waitlist!", color=0x34d399)
+        embed.add_field(name="IGN", value=ign, inline=True)
+        embed.add_field(name="Region", value=region, inline=True)
+        embed.add_field(name="Server", value=server, inline=True)
+        embed.add_field(name="Next Step", value=f"Go to {queue_mention} and click **Enter Queue** when testers are online.", inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class WaitlistButton(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Enter Waitlist", style=discord.ButtonStyle.primary, custom_id="waitlist_button")
+    async def enter_waitlist(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player_doc = db_mgr.players.find_one({"discord_id": interaction.user.id})
+        if player_doc:
+            is_banned = player_doc.get("banned", False)
+            if is_banned:
+                return await interaction.response.send_message("You are currently restricted from testing.", ephemeral=True)
+            region = player_doc.get("region", "").upper()
+            if region in REGION_QUEUE_CHANNELS:
+                queue_mention = f"<#{REGION_QUEUE_CHANNELS[region]}>"
+                return await interaction.response.send_message(f"You're already registered! Go to {queue_mention} and click **Enter Queue** when testers are online.", ephemeral=True)
+        await interaction.response.send_modal(WaitlistForm())
+
+
+# --- CLOSE TICKET BUTTON ---
+class CloseTicketButton(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.cancelled = False
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, custom_id="close_ticket_cancel")
+    async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.cancelled = True
+        await interaction.response.send_message("Ticket will stay open.", ephemeral=True)
+
+
+# --- NEW COMMANDS ---
+
+@bot.tree.command(name="givetier", description="Closes a ticket and gives a tier to a user (staff only)")
+async def givetier(interaction: discord.Interaction, user: discord.Member, tier: str):
     if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("No permission.", ephemeral=True)
-    n_mode = normalize_mode(gamemode)
-    if n_mode not in MODES:
-        return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
 
-    doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
-    closed = set(doc.get("modes", [])) if doc else set()
-    if n_mode in closed:
-        return await interaction.response.send_message(f"**{n_mode}** is already closed.", ephemeral=True)
-    closed.add(n_mode)
-    db_mgr.settings.update_one(
-        {"_id": "closed_gamemodes"},
-        {"$set": {"modes": list(closed)}},
-        upsert=True,
+    player_doc = db_mgr.players.find_one({"discord_id": user.id})
+    if not player_doc:
+        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
+
+    is_banned = player_doc.get("banned", False)
+    if is_banned:
+        return await interaction.response.send_message("User is restricted.", ephemeral=True)
+
+    old_tier = player_doc.get("tier", "none")
+    username = player_doc.get("username", "Unknown")
+    region = player_doc.get("region", "NA")
+
+    uuid = resolve_uuid(username)
+    embed = discord.Embed(title="Tier Result", color=0x34d399, timestamp=datetime.datetime.utcnow())
+    embed.add_field(name="Player", value=user.mention, inline=True)
+    embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
+    embed.add_field(name="Region", value=region, inline=True)
+    embed.add_field(name="IGN", value=username, inline=True)
+    embed.add_field(name="Previous Tier", value=old_tier, inline=True)
+    embed.add_field(name="New Tier", value=tier, inline=True)
+    if uuid:
+        embed.set_thumbnail(url=f"https://render.crafty.gg/3d/bust/{uuid}")
+
+    # Save result to DB (append to player's tier history)
+    db_mgr.players.update_one(
+        {"discord_id": user.id},
+        {"$set": {
+            "tier": tier,
+            "ts": datetime.datetime.utcnow(),
+        }},
     )
-
-    removed = db_mgr.queues.delete_many({"gamemode": n_mode, "status": "waiting"})
-    await log_action("QUEUE CLOSE", f"Closed **{n_mode}** (removed {removed.deleted_count} waiting entries)", interaction)
-    await interaction.response.send_message(f"Closed **{n_mode}** from queue. Removed {removed.deleted_count} pending entries.", ephemeral=True)
-    await _refresh_queue_channel(bot)
-
-@bot.tree.command(name="open")
-async def open_gamemode(interaction: discord.Interaction, gamemode: str):
-    """Re-open a gamemode in the queue (manage_roles only)"""
-    if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("No permission.", ephemeral=True)
-    n_mode = normalize_mode(gamemode)
-    doc = db_mgr.settings.find_one({"_id": "closed_gamemodes"})
-    closed = set(doc.get("modes", [])) if doc else set()
-    if n_mode not in closed:
-        return await interaction.response.send_message(f"**{n_mode}** is not closed.", ephemeral=True)
-    closed.discard(n_mode)
-    db_mgr.settings.update_one(
-        {"_id": "closed_gamemodes"},
-        {"$set": {"modes": list(closed)}},
-        upsert=True,
-    )
-    await log_action("QUEUE OPEN", f"Re-opened **{n_mode}** in queue", interaction)
-    await interaction.response.send_message(f"Re-opened **{n_mode}** in queue.", ephemeral=True)
-    await _refresh_queue_channel(bot)
-
-
-@bot.tree.command(name="resetqueue")
-async def resetqueue(interaction: discord.Interaction, user: discord.Member):
-    """Reset queue cooldown for a user (manage_roles only)"""
-    if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("No permission.", ephemeral=True)
-    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=3)
-    result = db_mgr.queues.delete_many({
+    # Also store in a results log
+    db_mgr.reports.insert_one({
         "discord_id": user.id,
-        "status": {"$in": ["waiting", "claimed"]},
-        "ts": {"$gte": cutoff}
+        "username": username,
+        "tester_id": interaction.user.id,
+        "old_tier": old_tier,
+        "new_tier": tier,
+        "region": region,
+        "ts": datetime.datetime.utcnow(),
     })
-    if result.deleted_count == 0:
-        return await interaction.response.send_message(f"**{user.display_name}** has no active queue entries.", ephemeral=True)
-    await _refresh_queue_channel(bot)
-    await interaction.response.send_message(f"Reset queue for **{user.display_name}** (removed {result.deleted_count} entries).", ephemeral=True)
+
+    # Remove old region roles
+    member = interaction.guild.get_member(user.id)
+    if member:
+        region_roles_to_remove = [role for role in member.roles if role.id in REGION_ROLE_IDS.values()]
+        if region_roles_to_remove:
+            await member.remove_roles(*region_roles_to_remove, reason="Region roles removed by /givetier")
+
+    await log_action("GIVETIER", f"{user.mention} ({username}): {old_tier} → {tier} in {region}", interaction)
+    await interaction.response.send_message(embed=embed)
+    await _update_gamemode_queue_embed("Sword")
+
+
+@bot.tree.command(name="closetest", description="Closes the current test ticket (staff only)")
+async def closetest(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    category_ids = list(REGION_TICKET_CATEGORIES.values())
+    if not interaction.channel.category or interaction.channel.category.id not in category_ids:
+        return await interaction.response.send_message("This command can only be used in testing channels.", ephemeral=True)
+    if interaction.channel.id in REGION_QUEUE_CHANNELS.values() or interaction.channel.id in GAMEMODE_QUEUE_CHANNELS.values():
+        return await interaction.response.send_message("You cannot use this command in this channel.", ephemeral=True)
+
+    view = CloseTicketButton()
+    await interaction.response.send_message("Ticket will be closed in 10 seconds", view=view)
+    await asyncio.sleep(10)
+    if not view.cancelled:
+        await interaction.channel.delete(reason="Ticket channel closed by command.")
+
+
+@bot.tree.command(name="forceclosetest", description="Force closes the current test ticket (staff only)")
+async def forceclosetest(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    category_ids = list(REGION_TICKET_CATEGORIES.values())
+    if not interaction.channel.category or interaction.channel.category.id not in category_ids:
+        return await interaction.response.send_message("This command can only be used in testing channels.", ephemeral=True)
+    if interaction.channel.id in REGION_QUEUE_CHANNELS.values() or interaction.channel.id in GAMEMODE_QUEUE_CHANNELS.values():
+        return await interaction.response.send_message("You cannot use this command in this channel.", ephemeral=True)
+
+    await interaction.response.send_message("Ticket will be closed in 10 seconds, cannot cancel")
+    await asyncio.sleep(10)
+    await interaction.channel.delete(reason="Ticket channel closed by command.")
+
+
+@bot.tree.command(name="updateusername", description="Updates a user's Minecraft username (staff only)")
+async def updateusername(interaction: discord.Interaction, user: discord.Member, username: str):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    player_doc = db_mgr.players.find_one({"discord_id": user.id})
+    if not player_doc:
+        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
+
+    uuid = resolve_uuid(username)
+    if not uuid:
+        return await interaction.response.send_message("Minecraft username does not exist.", ephemeral=True)
+
+    db_mgr.players.update_one(
+        {"discord_id": user.id},
+        {"$set": {"username": username, "uuid": uuid, "ts": datetime.datetime.utcnow()}},
+    )
+    await interaction.response.send_message("Username successfully updated.", ephemeral=True)
+
+
+@bot.tree.command(name="updatetier", description="Updates a user's tier in the database (staff only)")
+async def updatetier(interaction: discord.Interaction, user: discord.Member, tier: str):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    player_doc = db_mgr.players.find_one({"discord_id": user.id})
+    if not player_doc:
+        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
+
+    db_mgr.players.update_one(
+        {"discord_id": user.id},
+        {"$set": {"tier": tier, "ts": datetime.datetime.utcnow()}},
+    )
+    await interaction.response.send_message("Tier successfully updated in database. You will need to change their roles manually.", ephemeral=True)
+
+
+@bot.tree.command(name="restrict", description="Restricts a user from queuing (staff only)")
+async def restrict(interaction: discord.Interaction, user: discord.Member):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    player_doc = db_mgr.players.find_one({"discord_id": user.id})
+    if not player_doc:
+        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
+
+    db_mgr.players.update_one(
+        {"discord_id": user.id},
+        {"$set": {"banned": True, "ts": datetime.datetime.utcnow()}},
+    )
+    await interaction.response.send_message("User has been restricted.", ephemeral=True)
+
+
+@bot.tree.command(name="unrestrict", description="Unrestricts a user (staff only)")
+async def unrestrict(interaction: discord.Interaction, user: discord.Member):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    player_doc = db_mgr.players.find_one({"discord_id": user.id})
+    if not player_doc:
+        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
+
+    db_mgr.players.update_one(
+        {"discord_id": user.id},
+        {"$set": {"banned": False, "ts": datetime.datetime.utcnow()}},
+    )
+    await interaction.response.send_message("User has been unrestricted.", ephemeral=True)
+
+
+@bot.tree.command(name="info", description="Shows information about a user")
+async def info(interaction: discord.Interaction, user: discord.Member):
+    player_doc = db_mgr.players.find_one({"discord_id": user.id})
+    if not player_doc:
+        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
+
+    username = player_doc.get("username", "Unknown")
+    tier = player_doc.get("tier", "none")
+    region = player_doc.get("region", "N/A")
+    last_test = player_doc.get("ts")
+    restricted = player_doc.get("banned", False)
+    uuid = player_doc.get("uuid") or resolve_uuid(username)
+
+    embed = discord.Embed(title=f"Info — {user.display_name}", color=0x5865F2)
+    embed.add_field(name="IGN", value=username, inline=True)
+    embed.add_field(name="Tier", value=tier, inline=True)
+    embed.add_field(name="Region", value=region, inline=True)
+    embed.add_field(name="Restricted", value="Yes ❌" if restricted else "No ✅", inline=True)
+    if last_test:
+        embed.add_field(name="Last Test", value=f"<t:{int(last_test.timestamp())}:f>", inline=True)
+    if uuid:
+        embed.set_thumbnail(url=f"https://render.crafty.gg/3d/bust/{uuid}")
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="add", description="Adds a user to the current ticket (staff only)")
+async def add_to_ticket(interaction: discord.Interaction, user: discord.Member):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    category_ids = list(REGION_TICKET_CATEGORIES.values())
+    if not interaction.channel.category or interaction.channel.category.id not in category_ids:
+        return await interaction.response.send_message("This command can only be used in testing channels.", ephemeral=True)
+
+    overwrite = discord.PermissionOverwrite()
+    overwrite.view_channel = True
+    overwrite.send_messages = True
+    await interaction.channel.set_permissions(user, overwrite=overwrite)
+    await interaction.response.send_message(f"{user.mention} has been added to the ticket!")
+
+
+@bot.tree.command(name="remove", description="Removes a user from the current ticket (staff only)")
+async def remove_from_ticket(interaction: discord.Interaction, user: discord.Member):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    category_ids = list(REGION_TICKET_CATEGORIES.values())
+    if not interaction.channel.category or interaction.channel.category.id not in category_ids:
+        return await interaction.response.send_message("This command can only be used in testing channels.", ephemeral=True)
+
+    overwrite = discord.PermissionOverwrite()
+    overwrite.view_channel = False
+    overwrite.send_messages = False
+    await interaction.channel.set_permissions(user, overwrite=overwrite)
+    await interaction.response.send_message(f"{user.mention} has been removed from the ticket!")
+
+
+@bot.tree.command(name="passeval", description="Marks a user as passed eval (staff only)")
+async def passeval(interaction: discord.Interaction, user: discord.Member):
+    if not interaction.user.guild_permissions.manage_roles:
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    category_ids = list(REGION_TICKET_CATEGORIES.values())
+    if not interaction.channel.category or interaction.channel.category.id not in category_ids:
+        return await interaction.response.send_message("This command can only be used in testing channels.", ephemeral=True)
+    if interaction.channel.id in REGION_QUEUE_CHANNELS.values() or interaction.channel.id in GAMEMODE_QUEUE_CHANNELS.values():
+        return await interaction.response.send_message("You cannot use this command in this channel.", ephemeral=True)
+
+    await interaction.channel.edit(name=f"passeval-{user.display_name}")
+    await interaction.response.send_message(f"{user.mention} has passed eval!")
+
+
+class PartnerView(discord.ui.View):
+    def __init__(self, sub_id, channel_id):
+        super().__init__(timeout=None)
+        self.sub_id = sub_id
+        self.channel_id = channel_id
+
+    async def _update(self, interaction, new_status, color):
+        await interaction.response.defer()
+        try:
+            doc = db_mgr.partners.find_one({"_id": ObjectId(self.sub_id)})
+            if not doc:
+                return await interaction.followup.send("Submission not found.", ephemeral=True)
+            db_mgr.partners.update_one({"_id": ObjectId(self.sub_id)}, {"$set": {"status": new_status}})
+            embed = interaction.message.embeds[0]
+            embed.color = color
+            old_count = len(embed.fields)
+            embed.remove_field(old_count - 1)
+            embed.add_field(name="Status", value=new_status, inline=True)
+            for child in self.children:
+                child.disabled = True
+            await interaction.edit_original_response(embed=embed, view=self)
+
+            if "Approved" in new_status and doc.get("discord_id"):
+                try:
+                    category = interaction.guild.get_channel(PARTNER_CATEGORY_ID) if interaction.guild else None
+                    if category and isinstance(category, discord.CategoryChannel):
+                        ign = doc.get("ign", "partner")
+                        member = interaction.guild.get_member(doc["discord_id"])
+                        overwrites = {
+                            interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                            interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                        }
+                        if member:
+                            overwrites[member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                        chan = await category.create_text_channel(f"partner-{ign}", overwrites=overwrites)
+                        await chan.send(f"Welcome {member.mention if member else doc.get('discord_user', '')}! Your partner application has been approved.")
+                        db_mgr.partners.update_one({"_id": ObjectId(self.sub_id)}, {"$set": {"channel_id": chan.id}})
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="partner_accept")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_roles:
+            return await interaction.response.send_message("No permission.", ephemeral=True)
+        await self._update(interaction, "Approved ✅", 0x34d399)
+
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="partner_decline")
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_roles:
+            return await interaction.response.send_message("No permission.", ephemeral=True)
+        await self._update(interaction, "Declined ❌", 0xf87171)
 
 
 async def _get_ip_geo(ip):
@@ -2303,112 +1811,11 @@ async def alts(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-async def _create_automod_rule(guild_id, name, keyword_filter):
-    from discord.http import Route
-    route = Route("POST", "/guilds/{guild_id}/auto-moderation/rules", guild_id=guild_id)
-    data = {
-        "name": name,
-        "event_type": 1,
-        "trigger_type": 1,
-        "trigger_metadata": {"keyword_filter": keyword_filter},
-        "actions": [{"type": 1, "metadata": {}}],
-        "enabled": True,
-    }
-    return await bot.http.request(route, json=data)
 
-async def _delete_automod_rule(guild_id, rule_id):
-    from discord.http import Route
-    route = Route("DELETE", "/guilds/{guild_id}/auto-moderation/rules/{rule_id}", guild_id=guild_id, rule_id=rule_id)
-    return await bot.http.request(route)
 
-@bot.tree.command(name="busy")
-async def busy(interaction: discord.Interaction):
-    user = interaction.user
-    guild = interaction.guild
-    key = f"busy_rule_{user.id}"
 
-    existing = db_mgr.settings.find_one({"_id": key})
-    if existing:
-        try:
-            await _delete_automod_rule(guild.id, existing["rule_id"])
-        except Exception:
-            pass
-        db_mgr.settings.delete_one({"_id": key})
-        await interaction.response.send_message("Busy mode disabled.", ephemeral=True)
-    else:
-        try:
-            result = await _create_automod_rule(
-                guild.id,
-                f"Busy - {user.display_name}",
-                [f"<@{user.id}>", f"<@!{user.id}>"],
-            )
-            db_mgr.settings.update_one(
-                {"_id": key},
-                {"$set": {"rule_id": result["id"], "user_id": user.id}},
-                upsert=True,
-            )
-            await interaction.response.send_message("Busy mode enabled. Pings to you will be blocked.", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"Failed to enable busy mode: {e}", ephemeral=True)
 
-@bot.tree.command(name="svc")
-async def service_toggle(
-    interaction: discord.Interaction,
-    service: str,
-    state: str,
-    reason: str = None,
-):
-    if not interaction.user.guild_permissions.manage_roles:
-        return await interaction.response.send_message("No permission", ephemeral=True)
 
-    service_l = (service or "").lower().strip()
-    state_l = (state or "").lower().strip()
-
-    service_map = {
-        "web": "web",
-        "site": "web",
-        "bot": "bot",
-        "discord": "bot",
-        "database": "database",
-        "db": "database",
-        "partner": "partner",
-        "partners": "partner",
-    }
-
-    if service_l not in service_map:
-        return await interaction.response.send_message(
-            "Invalid service. Use one of: web, bot, database, partner",
-            ephemeral=True,
-        )
-
-    if state_l not in ["on", "off", "true", "false", "1", "0"]:
-        return await interaction.response.send_message(
-            "Invalid state. Use: on/off",
-            ephemeral=True,
-        )
-
-    turn_off = state_l in ["on", "true", "1"]
-
-    try:
-        db_mgr.settings.update_one(
-            {"_id": "offline_mode"},
-            {
-                "$set": {
-                    f"services.{service_map[service_l]}": bool(turn_off),
-                    "reason": (reason or "")[:500],
-                    "ts": datetime.datetime.utcnow(),
-                }
-            },
-            upsert=True,
-        )
-    except Exception as e:
-        return await interaction.response.send_message(f"Failed: {e}", ephemeral=True)
-
-    human_state = "OFFLINE" if turn_off else "ONLINE"
-    return await interaction.response.send_message(
-        f"Set {service_map[service_l]} to {human_state}.",
-        ephemeral=True,
-    )
 
 
 # --- WEB UI ---
@@ -2802,14 +2209,30 @@ def status_json():
 
 @app.route('/queue-status')
 def queue_status_page():
-    waiting = list(db_mgr.queues.find({"status": "waiting"}))
-    testers = _get_tester_profiles()
-    try:
-        q_embed = _update_queue_channel()
-        embed_data = {"title": q_embed.title, "fields": [{"name": f.name, "value": f.value} for f in q_embed.fields], "footer": q_embed.footer.text if q_embed.footer else ""}
-    except Exception:
-        embed_data = None
-    return render_template("queue_status.html", waiting=waiting, testers=testers, embed=embed_data)
+    waiting = []
+    for rcode, rdata in tier_queue.regions.items():
+        for entry in rdata["queue"]:
+            waiting.append(entry)
+    testers = []
+    for rcode, rdata in tier_queue.regions.items():
+        for uid in rdata["testers"]:
+            testers.append({"discord_id": uid, "region": rcode})
+    total_waiting = len(waiting)
+    total_testers = len(testers)
+    if total_testers > 0 and total_waiting > 0:
+        eta = f"~{max(5, (total_waiting // total_testers) * 12)} min"
+    elif total_waiting > 0:
+        eta = "Waiting for testers..."
+    else:
+        eta = "No queue"
+    region_data = {}
+    for rcode, rdata in tier_queue.regions.items():
+        region_data[rcode] = {
+            "open": rdata["open"],
+            "queue_count": len(rdata["queue"]),
+            "tester_count": len(rdata["testers"]),
+        }
+    return render_template("queue_status.html", waiting=waiting, testers=testers, eta=eta, region_data=region_data)
 
 
 @app.route('/heads')
