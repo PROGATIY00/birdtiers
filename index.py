@@ -443,10 +443,8 @@ def get_skin_url(uuid):
 
 def get_player_head_url(username, size=32):
     username = (username or "Steve").strip()
-    uuid = resolve_uuid(username)
-    identifier = uuid or username
-    # Fastest option: use minotar without per-request cache busting.
-    # Server-side refresh (every 15 minutes) updates the cached URLs.
+    player = db_mgr.players.find_one({"username": {"$regex": f"^{username}$", "$options": "i"}})
+    identifier = (player.get("uuid") or username) if player else username
     return f"https://minotar.net/helm/{identifier}/{size}"
 
 # --- DISCORD BOT ---
@@ -747,13 +745,17 @@ class VerifyIGNModal(discord.ui.Modal, title="Verify Your IGN"):
 
     async def on_submit(self, interaction: discord.Interaction):
         ign = self.ign_input.value.strip()
+        uuid = resolve_uuid(ign)
+        update = {
+            "username": ign,
+            "discord_id": interaction.user.id,
+            "ts": datetime.datetime.utcnow(),
+        }
+        if uuid:
+            update["uuid"] = uuid
         db_mgr.players.update_one(
             {"discord_id": interaction.user.id},
-            {"$set": {
-                "username": ign,
-                "discord_id": interaction.user.id,
-                "ts": datetime.datetime.utcnow(),
-            }},
+            {"$set": update},
             upsert=True,
         )
         embed = discord.Embed(title="IGN Verified!", color=0x34d399)
