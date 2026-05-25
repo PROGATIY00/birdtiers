@@ -298,7 +298,7 @@ GAMEMODE_REGION_CHANNEL_IDS = {
 }
 
 
-MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Cart", "1.8", "Trident", "Spear"]
+MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 
 REGION_COLORS = {
@@ -319,10 +319,6 @@ GAMEMODE_ICON_URLS = {
     "Axe": "https://imgur.com/tj9EPtk.png",
     "Sword": "https://imgur.com/Wf9dcUa.png",
     "Mace": "https://imgur.com/W4qul51.png",
-    "Cart": "https://img.icons8.com/ios-filled/64/ffffff/minecart.png",
-    "1.8": "https://img.icons8.com/ios-filled/64/ffffff/shield.png",
-    "Trident": "https://img.icons8.com/ios-filled/64/ffffff/trident.png",
-    "Spear": "https://img.icons8.com/ios-filled/64/ffffff/spear.png"
 }
 DEFAULT_GAMEMODE_ICON_URL = "https://img.icons8.com/ios-filled/64/ffffff/question-mark.png"
 
