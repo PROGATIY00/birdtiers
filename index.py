@@ -33,6 +33,11 @@ UNVERIFIED_ROLE_ID = int(os.getenv("UNVERIFIED_ROLE_ID")) if os.getenv("UNVERIFI
 MEMBER_ROLE_NAME = os.getenv("MEMBER_ROLE_NAME", "Member")
 UNVERIFIED_ROLE_NAME = os.getenv("UNVERIFIED_ROLE_NAME", "Unverified")
 
+# --- TESTER ROLE IDS ---
+TRAINEE_ROLE_ID = 1499375993167675392
+TESTER_ROLE_ID = 1497964651806326936
+HIGH_TESTER_ROLE_ID = 1508407033559519304
+
 # --- REGION ROLE IDS ---
 REGION_ROLE_IDS = {
     "EU": 1499373016445096096,
@@ -1456,6 +1461,30 @@ class CloseTicketButton(discord.ui.View):
 
 # --- NEW COMMANDS ---
 
+TIER_LIMIT_LT3 = get_tier_value("LT3")
+
+def _get_tester_role(member: discord.Member):
+    if HIGH_TESTER_ROLE_ID and member.get_role(HIGH_TESTER_ROLE_ID):
+        return "high"
+    if TESTER_ROLE_ID and member.get_role(TESTER_ROLE_ID):
+        return "tester"
+    if TRAINEE_ROLE_ID and member.get_role(TRAINEE_ROLE_ID):
+        return "trainee"
+    return None
+
+def _can_assign_tier(member: discord.Member, tier: str) -> tuple[bool, str]:
+    role = _get_tester_role(member)
+    if not role:
+        return False, "You do not have a tester role."
+    if role == "trainee":
+        return False, "Trainee testers cannot assign tiers."
+    tval = get_tier_value(tier)
+    if tval == 0:
+        return False, f"Invalid tier: {tier}"
+    if role == "tester" and tval > TIER_LIMIT_LT3:
+        return False, f"Testers can only assign tiers up to LT3. **{tier}** requires a High Tester."
+    return True, ""
+
 def _ensure_player(user_id, username=None):
     doc = db_mgr.players.find_one({"discord_id": user_id})
     if not doc:
@@ -1471,8 +1500,12 @@ def _ensure_player(user_id, username=None):
 
 @bot.tree.command(name="givetier", description="Gives a tier to a user for a specific gamemode (staff only)")
 async def givetier(interaction: discord.Interaction, user: discord.Member, gamemode: str, tier: str):
-    if not interaction.user.guild_permissions.manage_roles:
+    if not interaction.user.guild_permissions.manage_roles and not _get_tester_role(interaction.user):
         return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    can_assign, msg = _can_assign_tier(interaction.user, tier)
+    if not can_assign:
+        return await interaction.response.send_message(msg, ephemeral=True)
 
     gm = normalize_mode(gamemode.strip())
     if gm not in MODES:
@@ -1695,6 +1728,62 @@ async def passeval(interaction: discord.Interaction, user: discord.Member):
 
     await interaction.channel.edit(name=f"passeval-{user.display_name}")
     await interaction.response.send_message(f"{user.mention} has passed eval!")
+
+
+@bot.tree.command(name="forceoffline", description="Force a tester offline (High Tester/Admin only)")
+async def forceoffline(interaction: discord.Interaction, user: discord.Member):
+    if not interaction.user.guild_permissions.manage_roles and _get_tester_role(interaction.user) != "high":
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    doc = db_mgr.tester_profiles.find_one({"discord_id": user.id})
+    if not doc or not doc.get("online"):
+        return await interaction.response.send_message(f"{user.mention} is not online as a tester.", ephemeral=True)
+
+    region_u = doc.get("region")
+    old_gamemodes = list(doc.get("gamemodes", []))
+
+    db_mgr.tester_profiles.update_one(
+        {"discord_id": user.id},
+        {"$set": {"online": False, "gamemodes": [], "ts": datetime.datetime.utcnow()}},
+    )
+
+    if region_u:
+        tier_queue.remove_tester(region_u, user.id)
+        await _update_region_queue_embed(region_u)
+
+    for gm in old_gamemodes:
+        await _update_gamemode_queue_embed(gm)
+
+    await interaction.response.send_message(
+        f"{user.mention} has been forced offline by {interaction.user.mention}.", ephemeral=False
+    )
+    await log_action("FORCEOFFLINE", f"{user.mention} forced offline by {interaction.user.mention}", interaction)
+
+
+@bot.tree.command(name="leaderboard", description="Show top testers by completed tests")
+async def leaderboard(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_roles and not _get_tester_role(interaction.user):
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    pipeline = [
+        {"$group": {"_id": "$tester_id", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10},
+    ]
+    top_testers = list(db_mgr.reports.aggregate(pipeline))
+    if not top_testers:
+        return await interaction.response.send_message("No test results recorded yet.", ephemeral=True)
+
+    embed = discord.Embed(title="Test Leaderboard", color=0xffd700)
+    for i, entry in enumerate(top_testers, 1):
+        tid = entry["_id"]
+        count = entry["count"]
+        member = interaction.guild.get_member(tid) if interaction.guild else None
+        name = member.mention if member else f"<@{tid}>"
+        medal = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}.get(i, f"**#{i}**")
+        embed.add_field(name=f"{medal} {name}", value=f"{count} test{'s' if count != 1 else ''}", inline=False)
+
+    await interaction.response.send_message(embed=embed)
 
 
 class PartnerView(discord.ui.View):
