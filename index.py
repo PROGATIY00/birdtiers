@@ -789,6 +789,11 @@ class VerifyIGNModal(discord.ui.Modal, title="Verify Your IGN"):
 
     async def on_submit(self, interaction: discord.Interaction):
         ign = self.ign_input.value.strip()
+
+        existing = db_mgr.players.find_one({"username": {"$regex": f"^{ign}$", "$options": "i"}, "discord_id": {"$ne": interaction.user.id}})
+        if existing:
+            return await interaction.response.send_message(f"The IGN **{ign}** is already linked to another Discord account.", ephemeral=True)
+
         uuid = resolve_uuid(ign)
         update = {
             "username": ign,
@@ -1260,7 +1265,6 @@ async def _update_gamemode_queue_embed(gamemode):
         return
     msg_id = gdata.get("message_id")
 
-    just_opened = is_open and not gdata["was_open"]
     just_closed = not is_open and gdata["was_open"]
     if just_closed:
         gdata["closed_at"] = datetime.datetime.utcnow()
@@ -1281,37 +1285,18 @@ async def _update_gamemode_queue_embed(gamemode):
                 pass
         return
 
-    open_regions = [rc for rc, rd in tier_queue.regions.items() if rd["open"]]
-    role_id = GAMEMODE_ROLE_IDS.get(gamemode)
-    ping = f"<@&{role_id}>" if role_id else "@here"
-    content = f"{ping} a {gamemode} queue is open for the {', '.join(open_regions)} region{'s' if len(open_regions) > 1 else ''}!"
-
-    if just_opened:
-        if msg_id:
-            try:
-                old = await channel.fetch_message(msg_id)
-                await old.delete()
-            except Exception:
-                pass
-            msg_id = None
+    if msg_id:
         try:
-            msg = await channel.send(content=content, embed=embed, view=EnterQueueView())
-            gdata["message_id"] = msg.id
+            msg = await channel.fetch_message(msg_id)
+            await msg.edit(embed=embed, view=EnterQueueView())
         except Exception:
             pass
     else:
-        if msg_id:
-            try:
-                msg = await channel.fetch_message(msg_id)
-                await msg.edit(embed=embed, view=EnterQueueView())
-            except Exception:
-                pass
-        else:
-            try:
-                msg = await channel.send(embed=embed, view=EnterQueueView())
-                gdata["message_id"] = msg.id
-            except Exception:
-                pass
+        try:
+            msg = await channel.send(embed=embed, view=EnterQueueView())
+            gdata["message_id"] = msg.id
+        except Exception:
+            pass
 
 
 @bot.tree.command(name="offline")
@@ -1399,6 +1384,10 @@ class WaitlistForm(discord.ui.Modal, title="Join the Waitlist"):
         if region not in REGION_ROLE_IDS:
             return await interaction.response.send_message(f"Invalid region. Choose: {', '.join(REGION_ROLE_IDS.keys())}", ephemeral=True)
 
+        existing = db_mgr.players.find_one({"username": {"$regex": f"^{ign}$", "$options": "i"}, "discord_id": {"$ne": interaction.user.id}})
+        if existing:
+            return await interaction.response.send_message(f"The IGN **{ign}** is already linked to another Discord account.", ephemeral=True)
+
         uuid = resolve_uuid(ign)
         if not uuid:
             return await interaction.response.send_message("Could not verify Minecraft username. Make sure it exists on Mojang's API.", ephemeral=True)
@@ -1480,17 +1469,21 @@ def _ensure_player(user_id, username=None):
         return db_mgr.players.find_one({"discord_id": user_id})
     return doc
 
-@bot.tree.command(name="givetier", description="Closes a ticket and gives a tier to a user (staff only)")
-async def givetier(interaction: discord.Interaction, user: discord.Member, tier: str):
+@bot.tree.command(name="givetier", description="Gives a tier to a user for a specific gamemode (staff only)")
+async def givetier(interaction: discord.Interaction, user: discord.Member, gamemode: str, tier: str):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
 
+    gm = normalize_mode(gamemode.strip())
+    if gm not in MODES:
+        return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
+
     player_doc = _ensure_player(user.id, user.display_name)
-    is_banned = player_doc.get("banned", False)
-    if is_banned:
+    if player_doc.get("banned", False):
         return await interaction.response.send_message("User is restricted.", ephemeral=True)
 
-    old_tier = player_doc.get("tier", "none")
+    gm_tier_doc = db_mgr.players.find_one({"discord_id": user.id, "gamemode": gm})
+    old_tier = gm_tier_doc.get("tier", "none") if gm_tier_doc else "none"
     username = player_doc.get("username", "Unknown")
     region = player_doc.get("region", "NA")
 
@@ -1498,6 +1491,7 @@ async def givetier(interaction: discord.Interaction, user: discord.Member, tier:
     embed = discord.Embed(title="Tier Result", color=0x34d399, timestamp=datetime.datetime.utcnow())
     embed.add_field(name="Player", value=user.mention, inline=True)
     embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
+    embed.add_field(name="Gamemode", value=gm, inline=True)
     embed.add_field(name="Region", value=region, inline=True)
     embed.add_field(name="IGN", value=username, inline=True)
     embed.add_field(name="Previous Tier", value=old_tier, inline=True)
@@ -1505,18 +1499,23 @@ async def givetier(interaction: discord.Interaction, user: discord.Member, tier:
     if uuid:
         embed.set_thumbnail(url=f"https://render.crafty.gg/3d/bust/{uuid}")
 
-    # Save result to DB (append to player's tier history)
+    # Save per-gamemode tier
     db_mgr.players.update_one(
-        {"discord_id": user.id},
+        {"discord_id": user.id, "gamemode": gm},
         {"$set": {
+            "gamemode": gm,
+            "discord_id": user.id,
+            "username": username,
             "tier": tier,
             "ts": datetime.datetime.utcnow(),
         }},
+        upsert=True,
     )
     # Also store in a results log
     db_mgr.reports.insert_one({
         "discord_id": user.id,
         "username": username,
+        "gamemode": gm,
         "tester_id": interaction.user.id,
         "old_tier": old_tier,
         "new_tier": tier,
@@ -1531,9 +1530,9 @@ async def givetier(interaction: discord.Interaction, user: discord.Member, tier:
         if region_roles_to_remove:
             await member.remove_roles(*region_roles_to_remove, reason="Region roles removed by /givetier")
 
-    await log_action("GIVETIER", f"{user.mention} ({username}): {old_tier} → {tier} in {region}", interaction)
+    await log_action("GIVETIER", f"{user.mention} ({username}): [{gm}] {old_tier} → {tier} in {region}", interaction)
     await interaction.response.send_message(embed=embed)
-    await _update_gamemode_queue_embed("Sword")
+    await _update_gamemode_queue_embed(gm)
 
 
 @bot.tree.command(name="closetest", description="Closes the current test ticket (staff only)")
