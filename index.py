@@ -1779,7 +1779,12 @@ async def leaderboard(interaction: discord.Interaction):
         tid = entry["_id"]
         count = entry["count"]
         member = interaction.guild.get_member(tid) if interaction.guild else None
-        name = member.mention if member else f"<@{tid}>"
+        if member:
+            name = member.mention
+        else:
+            tdoc = db_mgr.tester_profiles.find_one({"discord_id": tid})
+            ign = (tdoc.get("ign") or tdoc.get("username") or f"<@{tid}>") if tdoc else f"<@{tid}>"
+            name = ign
         medal = {1: "\U0001f947", 2: "\U0001f948", 3: "\U0001f949"}.get(i, f"**#{i}**")
         embed.add_field(name=f"{medal} {name}", value=f"{count} test{'s' if count != 1 else ''}", inline=False)
 
