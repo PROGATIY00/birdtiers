@@ -777,6 +777,17 @@ def _get_tester_profiles():
 
 
 
+async def _notify_testers(gamemode, player_mention):
+    chan = bot.get_channel(TESTER_NOTIF_CHANNEL_ID)
+    if not chan:
+        return
+    tdocs = list(db_mgr.tester_profiles.find({"online": True, "gamemodes": gamemode}))
+    if not tdocs:
+        return
+    pings = " ".join(f"<@{t['discord_id']}>" for t in tdocs)
+    await chan.send(f"{pings} — {player_mention} joined the **{gamemode}** queue")
+
+
 class VerifyIGNModal(discord.ui.Modal, title="Verify Your IGN"):
     def __init__(self):
         super().__init__()
@@ -850,6 +861,7 @@ class EnterQueueModal(discord.ui.Modal, title="Join Queue"):
 
         await _update_gamemode_queue_embed(self.gamemode)
         await _update_region_queue_embed(self.region)
+        await _notify_testers(self.gamemode, interaction.user.mention)
 
 
 class RegionSelectView(discord.ui.View):
@@ -910,6 +922,7 @@ class EnterQueueView(discord.ui.View):
             await interaction.response.send_message(result, ephemeral=True)
             await _update_gamemode_queue_embed(gamemode)
             await _update_region_queue_embed(detected_region)
+            await _notify_testers(gamemode, interaction.user.mention)
             return
 
         ign_default = player_doc.get("username", "") if player_doc else ""
