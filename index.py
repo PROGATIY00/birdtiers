@@ -298,7 +298,7 @@ GAMEMODE_REGION_CHANNEL_IDS = {
 }
 
 
-MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace"]
+MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Neth"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 
 REGION_COLORS = {
@@ -319,6 +319,7 @@ GAMEMODE_ICON_URLS = {
     "Axe": "https://imgur.com/tj9EPtk.png",
     "Sword": "https://imgur.com/Wf9dcUa.png",
     "Mace": "https://imgur.com/W4qul51.png",
+    "Neth": "https://img.icons8.com/ios-filled/64/ffffff/netherite-ingot.png",
 }
 DEFAULT_GAMEMODE_ICON_URL = "https://img.icons8.com/ios-filled/64/ffffff/question-mark.png"
 
@@ -1800,6 +1801,77 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+@bot.tree.command(name="migrate", description="Migrate a user's tier from one gamemode to another (staff only)")
+async def migrate(interaction: discord.Interaction, user: discord.Member, from_gamemode: str, to_gamemode: str):
+    if not interaction.user.guild_permissions.manage_roles and not _get_tester_role(interaction.user):
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    from_gm = normalize_mode(from_gamemode.strip())
+    to_gm = normalize_mode(to_gamemode.strip())
+    if from_gm not in MODES or to_gm not in MODES:
+        return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
+    if from_gm == to_gm:
+        return await interaction.response.send_message("Source and target gamemode must be different.", ephemeral=True)
+
+    source = db_mgr.players.find_one({"discord_id": user.id, "gamemode": from_gm})
+    if not source or not source.get("tier") or source.get("tier") == "none":
+        return await interaction.response.send_message(f"{user.mention} has no tier in **{from_gm}**.", ephemeral=True)
+
+    tier = source["tier"]
+    username = source.get("username", "Unknown")
+
+    target = db_mgr.players.find_one({"discord_id": user.id, "gamemode": to_gm})
+    old_tier = target.get("tier", "none") if target else "none"
+
+    # Upsert the new gamemode entry
+    db_mgr.players.update_one(
+        {"discord_id": user.id, "gamemode": to_gm},
+        {"$set": {
+            "gamemode": to_gm,
+            "discord_id": user.id,
+            "username": username,
+            "tier": tier,
+            "ts": datetime.datetime.utcnow(),
+        }},
+        upsert=True,
+    )
+    # Mark source as retired
+    db_mgr.players.update_one(
+        {"discord_id": user.id, "gamemode": from_gm},
+        {"$set": {"retired": True, "ts": datetime.datetime.utcnow()}},
+    )
+
+    embed = discord.Embed(title="Tier Migrated", color=0x5865F2, timestamp=datetime.datetime.utcnow())
+    embed.add_field(name="Player", value=user.mention, inline=True)
+    embed.add_field(name="Staff", value=interaction.user.mention, inline=True)
+    embed.add_field(name="From", value=f"{from_gm}: {tier}", inline=True)
+    embed.add_field(name="To", value=f"{to_gm} ({old_tier} → {tier})", inline=True)
+    await interaction.response.send_message(embed=embed)
+    await log_action("MIGRATE", f"{user.mention}: {from_gm} {tier} → {to_gm} (was {old_tier})", interaction)
+
+
+@bot.tree.command(name="retire", description="Retire a user's tier in a specific gamemode (staff only)")
+async def retire(interaction: discord.Interaction, user: discord.Member, gamemode: str):
+    if not interaction.user.guild_permissions.manage_roles and not _get_tester_role(interaction.user):
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    gm = normalize_mode(gamemode.strip())
+    if gm not in MODES:
+        return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
+
+    doc = db_mgr.players.find_one({"discord_id": user.id, "gamemode": gm})
+    if not doc or not doc.get("tier") or doc.get("tier") == "none":
+        return await interaction.response.send_message(f"{user.mention} has no tier in **{gm}**.", ephemeral=True)
+
+    db_mgr.players.update_one(
+        {"discord_id": user.id, "gamemode": gm},
+        {"$set": {"retired": True, "ts": datetime.datetime.utcnow()}},
+    )
+
+    await interaction.response.send_message(f"{user.mention}'s **{gm}** tier ({doc['tier']}) has been retired.")
+    await log_action("RETIRE", f"{user.mention}: {gm} {doc['tier']} retired", interaction)
+
+
 class PartnerView(discord.ui.View):
     def __init__(self, sub_id, channel_id):
         super().__init__(timeout=None)
@@ -2044,7 +2116,7 @@ def home():
     mode_q = normalize_mode(request.args.get('mode', ''))
     search_q = request.args.get('search', '').lower()
 
-    raw = list(db_mgr.players.find({"banned": {"$ne": True}}))
+    raw = list(db_mgr.players.find({"banned": {"$ne": True}, "gamemode": {"$exists": True}}))
     users = {}
 
     for r in raw:
@@ -2448,7 +2520,7 @@ def queue_status_page():
 
 @app.route('/heads')
 def head_status():
-    raw = list(db_mgr.players.find({"banned": {"$ne": True}}))
+    raw = list(db_mgr.players.find({"banned": {"$ne": True}, "gamemode": {"$exists": True}}))
     seen = {}
     for r in raw:
         u = r["username"]
