@@ -301,6 +301,42 @@ GAMEMODE_REGION_CHANNEL_IDS = {
 MODES = ["Crystal", "UHC", "Pot", "SMP", "Axe", "Sword", "Mace", "Neth"]
 TIER_ORDER = ["LT5", "HT5", "LT4", "HT4", "LT3", "HT3", "LT2", "HT2", "LT1", "HT1"]
 
+ELO_TIERS = [
+    (0, 5, "LT5"), (5, 10, "HT5"), (10, 20, "LT4"), (20, 30, "HT4"),
+    (30, 45, "LT3"), (45, 60, "HT3"), (60, 120, "LT2"),
+    (120, 130, "HT2"), (130, 150, "LT1"), (150, 100000, "HT1"),
+]
+
+TIER_TO_MID_ELO = {
+    "LT5": 2, "HT5": 7, "LT4": 15, "HT4": 25, "LT3": 37,
+    "HT3": 52, "LT2": 90, "HT2": 125, "LT1": 140, "HT1": 175,
+}
+
+def elo_to_tier(elo):
+    for lo, hi, tier in ELO_TIERS:
+        if lo <= elo < hi:
+            return tier
+    return "none"
+
+def _migrate_tiers_to_elo():
+    imported = db_mgr.players.find({"elo": {"$exists": False}, "tier": {"$exists": True, "$ne": None}})
+    count = 0
+    for doc in imported:
+        raw = doc.get("tier")
+        if not raw:
+            continue
+        n = normalize_tier(raw)
+        elo_val = TIER_TO_MID_ELO.get(n)
+        if elo_val is None:
+            continue
+        db_mgr.players.update_one(
+            {"_id": doc["_id"]},
+            {"$set": {"elo": elo_val}, "$unset": {"tier": ""}},
+        )
+        count += 1
+    if count:
+        print(f"[MIGRATION] Converted {count} documents from tier → elo")
+
 REGION_COLORS = {
     "NA": "#ff4d4d", "EU": "#4d94ff", "AS": "#ffdb4d",
     "SA": "#4dff88", "OC": "#ff4dff", "AF": "#ffa64d"
@@ -627,6 +663,7 @@ class MagmaBot(discord.Client):
         refresh_region_queues.start()
 
     async def on_ready(self):
+        _migrate_tiers_to_elo()
         tier_queue.setup()
         # Build channel -> gamemode reverse lookup
         global CHANNEL_TO_GAMEMODE
@@ -1087,7 +1124,9 @@ async def next_in_queue(interaction: discord.Interaction):
         for gm in MODES:
             record = db_mgr.players.find_one({"discord_id": user_id, "gamemode": gm})
             if record and not record.get("retired") and not record.get("banned"):
-                active_modes.append(f"{gm}: {record.get('tier', 'N/A')}")
+                elo = record.get("elo", 0)
+                t = elo_to_tier(elo)
+                active_modes.append(f"{gm}: {t} ({elo} ELO)")
         if active_modes:
             embed.add_field(name="Tiers", value="\n".join(active_modes), inline=False)
 
@@ -1501,17 +1540,23 @@ def _ensure_player(user_id, username=None):
         db_mgr.players.insert_one({
             "discord_id": user_id,
             "username": username or "Unknown",
-            "tier": "none",
             "banned": False,
             "ts": datetime.datetime.utcnow(),
         })
         return db_mgr.players.find_one({"discord_id": user_id})
     return doc
 
-@bot.tree.command(name="givetier", description="Gives a tier to a user for a specific gamemode (staff only)")
-async def givetier(interaction: discord.Interaction, user: discord.Member, gamemode: str, tier: str):
+@bot.tree.command(name="givetier", description="Set a player's ELO for a gamemode (staff only)")
+async def givetier(interaction: discord.Interaction, user: discord.Member, gamemode: str, elo: int):
     if not interaction.user.guild_permissions.manage_roles and not _get_tester_role(interaction.user):
         return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    if elo < 0:
+        return await interaction.response.send_message("ELO cannot be negative.", ephemeral=True)
+
+    tier = elo_to_tier(elo)
+    if tier == "none":
+        return await interaction.response.send_message(f"ELO {elo} does not map to any tier.", ephemeral=True)
 
     can_assign, msg = _can_assign_tier(interaction.user, tier)
     if not can_assign:
@@ -1521,59 +1566,68 @@ async def givetier(interaction: discord.Interaction, user: discord.Member, gamem
     if gm not in MODES:
         return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
 
+    # Enforce HT1: only one player per gamemode
+    if tier == "HT1":
+        existing_ht1 = db_mgr.players.find_one({"gamemode": gm, "elo": {"$gte": 150}, "discord_id": {"$ne": user.id}})
+        if existing_ht1:
+            return await interaction.response.send_message(
+                f"HT1 is already held by <@{existing_ht1['discord_id']}> in **{gm}**. Only one HT1 per gamemode is allowed.",
+                ephemeral=True,
+            )
+
     player_doc = _ensure_player(user.id, user.display_name)
     if player_doc.get("banned", False):
         return await interaction.response.send_message("User is restricted.", ephemeral=True)
 
-    gm_tier_doc = db_mgr.players.find_one({"discord_id": user.id, "gamemode": gm})
-    old_tier = gm_tier_doc.get("tier", "none") if gm_tier_doc else "none"
+    gm_doc = db_mgr.players.find_one({"discord_id": user.id, "gamemode": gm})
+    old_elo = gm_doc.get("elo", 0) if gm_doc else 0
+    old_tier = elo_to_tier(old_elo)
     username = player_doc.get("username", "Unknown")
     region = player_doc.get("region", "NA")
 
     uuid = resolve_uuid(username)
-    embed = discord.Embed(title="Tier Result", color=0x34d399, timestamp=datetime.datetime.utcnow())
+    embed = discord.Embed(title="ELO Set", color=0x34d399, timestamp=datetime.datetime.utcnow())
     embed.add_field(name="Player", value=user.mention, inline=True)
-    embed.add_field(name="Tester", value=interaction.user.mention, inline=True)
+    embed.add_field(name="Staff", value=interaction.user.mention, inline=True)
     embed.add_field(name="Gamemode", value=gm, inline=True)
     embed.add_field(name="Region", value=region, inline=True)
     embed.add_field(name="IGN", value=username, inline=True)
-    embed.add_field(name="Previous Tier", value=old_tier, inline=True)
-    embed.add_field(name="New Tier", value=tier, inline=True)
+    embed.add_field(name="Old", value=f"{old_elo} ELO ({old_tier})", inline=True)
+    embed.add_field(name="New", value=f"{elo} ELO ({tier})", inline=True)
     if uuid:
         embed.set_thumbnail(url=f"https://render.crafty.gg/3d/bust/{uuid}")
 
-    # Save per-gamemode tier
     db_mgr.players.update_one(
         {"discord_id": user.id, "gamemode": gm},
         {"$set": {
             "gamemode": gm,
             "discord_id": user.id,
             "username": username,
-            "tier": tier,
+            "elo": elo,
             "ts": datetime.datetime.utcnow(),
         }},
         upsert=True,
     )
-    # Also store in a results log
     db_mgr.reports.insert_one({
         "discord_id": user.id,
         "username": username,
         "gamemode": gm,
         "tester_id": interaction.user.id,
+        "old_elo": old_elo,
+        "new_elo": elo,
         "old_tier": old_tier,
         "new_tier": tier,
         "region": region,
         "ts": datetime.datetime.utcnow(),
     })
 
-    # Remove old region roles
     member = interaction.guild.get_member(user.id)
     if member:
         region_roles_to_remove = [role for role in member.roles if role.id in REGION_ROLE_IDS.values()]
         if region_roles_to_remove:
             await member.remove_roles(*region_roles_to_remove, reason="Region roles removed by /givetier")
 
-    await log_action("GIVETIER", f"{user.mention} ({username}): [{gm}] {old_tier} → {tier} in {region}", interaction)
+    await log_action("GIVETIER", f"{user.mention} ({username}): [{gm}] {old_elo}→{elo} ELO ({old_tier}→{tier})", interaction)
     await interaction.response.send_message(embed=embed)
     await _update_gamemode_queue_embed(gm)
 
@@ -1675,17 +1729,30 @@ async def info(interaction: discord.Interaction, user: discord.Member):
     player_doc = _ensure_player(user.id, user.display_name)
 
     username = player_doc.get("username", "Unknown")
-    tier = player_doc.get("tier", "none")
     region = player_doc.get("region", "N/A")
     last_test = player_doc.get("ts")
     restricted = player_doc.get("banned", False)
     uuid = player_doc.get("uuid") or resolve_uuid(username)
 
+    gm_docs = list(db_mgr.players.find({"discord_id": user.id, "gamemode": {"$exists": True}}))
+
     embed = discord.Embed(title=f"Info — {user.display_name}", color=0x5865F2)
     embed.add_field(name="IGN", value=username, inline=True)
-    embed.add_field(name="Tier", value=tier, inline=True)
     embed.add_field(name="Region", value=region, inline=True)
     embed.add_field(name="Restricted", value="Yes ❌" if restricted else "No ✅", inline=True)
+
+    lines = []
+    for d in gm_docs:
+        gm = d.get("gamemode", "?")
+        elo = d.get("elo", 0)
+        tier = elo_to_tier(elo)
+        retired = " (retired)" if d.get("retired") else ""
+        lines.append(f"**{gm}**: {elo} ELO — {tier}{retired}")
+    if lines:
+        embed.add_field(name="Gamemodes", value="\n".join(lines), inline=False)
+    else:
+        embed.add_field(name="Tiers", value="None recorded", inline=True)
+
     if last_test:
         embed.add_field(name="Last Test", value=f"<t:{int(last_test.timestamp())}:f>", inline=True)
     if uuid:
@@ -1801,6 +1868,90 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+@bot.tree.command(name="win", description="Add ELO to a player for winning a test (staff only)")
+async def win(interaction: discord.Interaction, user: discord.Member, gamemode: str, elo: int = 5):
+    if not interaction.user.guild_permissions.manage_roles and not _get_tester_role(interaction.user):
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    gm = normalize_mode(gamemode.strip())
+    if gm not in MODES:
+        return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
+    if elo <= 0:
+        return await interaction.response.send_message("ELO must be positive.", ephemeral=True)
+
+    player_doc = _ensure_player(user.id, user.display_name)
+    if player_doc.get("banned", False):
+        return await interaction.response.send_message("User is restricted.", ephemeral=True)
+
+    gm_doc = db_mgr.players.find_one({"discord_id": user.id, "gamemode": gm})
+    old_elo = gm_doc.get("elo", 0) if gm_doc else 0
+    new_elo = old_elo + elo
+
+    new_tier = elo_to_tier(new_elo)
+
+    if new_tier == "HT1":
+        existing_ht1 = db_mgr.players.find_one({"gamemode": gm, "elo": {"$gte": 150}, "discord_id": {"$ne": user.id}})
+        if existing_ht1:
+            return await interaction.response.send_message(
+                f"HT1 is already held by <@{existing_ht1['discord_id']}> in **{gm}**. Only one HT1 per gamemode.",
+                ephemeral=True,
+            )
+
+    username = player_doc.get("username", "Unknown")
+
+    db_mgr.players.update_one(
+        {"discord_id": user.id, "gamemode": gm},
+        {"$set": {
+            "gamemode": gm, "discord_id": user.id, "username": username,
+            "elo": new_elo, "ts": datetime.datetime.utcnow(),
+        }},
+        upsert=True,
+    )
+
+    await interaction.response.send_message(
+        f"+{elo} ELO for {user.mention} in **{gm}** ({old_elo} → {new_elo}, {elo_to_tier(old_elo)} → {new_tier})",
+        ephemeral=False,
+    )
+    await log_action("WIN", f"{user.mention} +{elo} ELO in {gm} ({old_elo}→{new_elo})", interaction)
+
+
+@bot.tree.command(name="loss", description="Subtract ELO from a player for losing a test (staff only)")
+async def loss(interaction: discord.Interaction, user: discord.Member, gamemode: str, elo: int = 5):
+    if not interaction.user.guild_permissions.manage_roles and not _get_tester_role(interaction.user):
+        return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
+    gm = normalize_mode(gamemode.strip())
+    if gm not in MODES:
+        return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
+    if elo <= 0:
+        return await interaction.response.send_message("ELO must be positive.", ephemeral=True)
+
+    player_doc = _ensure_player(user.id, user.display_name)
+    if player_doc.get("banned", False):
+        return await interaction.response.send_message("User is restricted.", ephemeral=True)
+
+    gm_doc = db_mgr.players.find_one({"discord_id": user.id, "gamemode": gm})
+    old_elo = gm_doc.get("elo", 0) if gm_doc else 0
+    new_elo = max(0, old_elo - elo)
+
+    username = player_doc.get("username", "Unknown")
+
+    db_mgr.players.update_one(
+        {"discord_id": user.id, "gamemode": gm},
+        {"$set": {
+            "gamemode": gm, "discord_id": user.id, "username": username,
+            "elo": new_elo, "ts": datetime.datetime.utcnow(),
+        }},
+        upsert=True,
+    )
+
+    await interaction.response.send_message(
+        f"-{elo} ELO for {user.mention} in **{gm}** ({old_elo} → {new_elo}, {elo_to_tier(old_elo)} → {elo_to_tier(new_elo)})",
+        ephemeral=False,
+    )
+    await log_action("LOSS", f"{user.mention} -{elo} ELO in {gm} ({old_elo}→{new_elo})", interaction)
+
+
 @bot.tree.command(name="migrate", description="Migrate a user's tier from one gamemode to another (staff only)")
 async def migrate(interaction: discord.Interaction, user: discord.Member, from_gamemode: str, to_gamemode: str):
     if not interaction.user.guild_permissions.manage_roles and not _get_tester_role(interaction.user):
@@ -1814,23 +1965,22 @@ async def migrate(interaction: discord.Interaction, user: discord.Member, from_g
         return await interaction.response.send_message("Source and target gamemode must be different.", ephemeral=True)
 
     source = db_mgr.players.find_one({"discord_id": user.id, "gamemode": from_gm})
-    if not source or not source.get("tier") or source.get("tier") == "none":
-        return await interaction.response.send_message(f"{user.mention} has no tier in **{from_gm}**.", ephemeral=True)
+    if not source or source.get("elo", 0) == 0:
+        return await interaction.response.send_message(f"{user.mention} has no ELO in **{from_gm}**.", ephemeral=True)
 
-    tier = source["tier"]
+    elo = source["elo"]
     username = source.get("username", "Unknown")
 
     target = db_mgr.players.find_one({"discord_id": user.id, "gamemode": to_gm})
-    old_tier = target.get("tier", "none") if target else "none"
+    old_elo = target.get("elo", 0) if target else 0
 
-    # Upsert the new gamemode entry
     db_mgr.players.update_one(
         {"discord_id": user.id, "gamemode": to_gm},
         {"$set": {
             "gamemode": to_gm,
             "discord_id": user.id,
             "username": username,
-            "tier": tier,
+            "elo": elo,
             "ts": datetime.datetime.utcnow(),
         }},
         upsert=True,
@@ -1841,11 +1991,11 @@ async def migrate(interaction: discord.Interaction, user: discord.Member, from_g
         {"$set": {"retired": True, "ts": datetime.datetime.utcnow()}},
     )
 
-    embed = discord.Embed(title="Tier Migrated", color=0x5865F2, timestamp=datetime.datetime.utcnow())
+    embed = discord.Embed(title="ELO Migrated", color=0x5865F2, timestamp=datetime.datetime.utcnow())
     embed.add_field(name="Player", value=user.mention, inline=True)
     embed.add_field(name="Staff", value=interaction.user.mention, inline=True)
-    embed.add_field(name="From", value=f"{from_gm}: {tier}", inline=True)
-    embed.add_field(name="To", value=f"{to_gm} ({old_tier} → {tier})", inline=True)
+    embed.add_field(name="From", value=f"{from_gm}: {elo} ELO ({elo_to_tier(elo)})", inline=True)
+    embed.add_field(name="To", value=f"{to_gm}: {old_elo} → {elo} ELO ({elo_to_tier(old_elo)} → {elo_to_tier(elo)})", inline=True)
     await interaction.response.send_message(embed=embed)
     await log_action("MIGRATE", f"{user.mention}: {from_gm} {tier} → {to_gm} (was {old_tier})", interaction)
 
@@ -1860,16 +2010,18 @@ async def retire(interaction: discord.Interaction, user: discord.Member, gamemod
         return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
 
     doc = db_mgr.players.find_one({"discord_id": user.id, "gamemode": gm})
-    if not doc or not doc.get("tier") or doc.get("tier") == "none":
-        return await interaction.response.send_message(f"{user.mention} has no tier in **{gm}**.", ephemeral=True)
+    elo = doc.get("elo", 0) if doc else 0
+    if not doc or elo == 0:
+        return await interaction.response.send_message(f"{user.mention} has no ELO in **{gm}**.", ephemeral=True)
 
     db_mgr.players.update_one(
         {"discord_id": user.id, "gamemode": gm},
         {"$set": {"retired": True, "ts": datetime.datetime.utcnow()}},
     )
 
-    await interaction.response.send_message(f"{user.mention}'s **{gm}** tier ({doc['tier']}) has been retired.")
-    await log_action("RETIRE", f"{user.mention}: {gm} {doc['tier']} retired", interaction)
+    t = elo_to_tier(elo)
+    await interaction.response.send_message(f"{user.mention}'s **{gm}** ({elo} ELO — {t}) has been retired.")
+    await log_action("RETIRE", f"{user.mention}: {gm} {elo} ELO ({t}) retired", interaction)
 
 
 class PartnerView(discord.ui.View):
@@ -2122,9 +2274,11 @@ def home():
     for r in raw:
         u = r['username']
         n_mode = normalize_mode(r.get('gamemode'))
-        n_tier = normalize_tier(r.get('tier'))
+        elo_val = r.get('elo', 0)
+        n_tier = normalize_tier(elo_to_tier(elo_val if elo_val else 0))
         r['_normalized_gamemode'] = n_mode
         r['_normalized_tier'] = n_tier
+        r['elo'] = elo_val
 
         if u not in users:
             reg = r.get('region', 'NA').strip().upper()
