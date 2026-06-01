@@ -1506,34 +1506,22 @@ def _ensure_player(user_id, username=None):
         return db_mgr.players.find_one({"discord_id": user_id})
     return doc
 
-@bot.tree.command(name="givetier", description="Set a player's ELO for a gamemode (staff only)")
-async def givetier(interaction: discord.Interaction, user: discord.Member, gamemode: str, elo: int):
+@bot.tree.command(name="givetier", description="Set/add/remove ELO for a player in a gamemode (staff only)")
+@app_commands.choices(action=[
+    app_commands.Choice(name="set", value="set"),
+    app_commands.Choice(name="win", value="win"),
+    app_commands.Choice(name="loss", value="loss"),
+])
+async def givetier(interaction: discord.Interaction, user: discord.Member, gamemode: str, elo: int, action: str = "set"):
     if not interaction.user.guild_permissions.manage_roles and not _get_tester_role(interaction.user):
         return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
 
     if elo < 0:
         return await interaction.response.send_message("ELO cannot be negative.", ephemeral=True)
 
-    tier = elo_to_tier(elo)
-    if tier == "none":
-        return await interaction.response.send_message(f"ELO {elo} does not map to any tier.", ephemeral=True)
-
-    can_assign, msg = _can_assign_tier(interaction.user, tier)
-    if not can_assign:
-        return await interaction.response.send_message(msg, ephemeral=True)
-
     gm = normalize_mode(gamemode.strip())
     if gm not in MODES:
         return await interaction.response.send_message(f"Invalid gamemode. Choose: {', '.join(MODES)}", ephemeral=True)
-
-    # Enforce HT1: only one player per gamemode
-    if tier == "HT1":
-        existing_ht1 = db_mgr.players.find_one({"gamemode": gm, "elo": {"$gte": 150}, "discord_id": {"$ne": user.id}})
-        if existing_ht1:
-            return await interaction.response.send_message(
-                f"HT1 is already held by <@{existing_ht1['discord_id']}> in **{gm}**. Only one HT1 per gamemode is allowed.",
-                ephemeral=True,
-            )
 
     player_doc = _ensure_player(user.id, user.display_name)
     if player_doc.get("banned", False):
@@ -1545,17 +1533,41 @@ async def givetier(interaction: discord.Interaction, user: discord.Member, gamem
     username = player_doc.get("username", "Unknown")
     region = player_doc.get("region", "NA")
 
-    uuid = resolve_uuid(username)
-    embed = discord.Embed(title="ELO Set", color=0x34d399, timestamp=datetime.datetime.utcnow())
+    if action == "set":
+        new_elo = elo
+    elif action == "win":
+        new_elo = old_elo + elo
+    else:
+        new_elo = max(0, old_elo - elo)
+
+    tier = elo_to_tier(new_elo)
+    if tier == "none":
+        return await interaction.response.send_message(f"ELO {new_elo} does not map to any tier.", ephemeral=True)
+
+    can_assign, msg = _can_assign_tier(interaction.user, tier)
+    if not can_assign:
+        return await interaction.response.send_message(msg, ephemeral=True)
+
+    # Enforce HT1: only one player per gamemode
+    if tier == "HT1":
+        existing_ht1 = db_mgr.players.find_one({"gamemode": gm, "elo": {"$gte": 150}, "discord_id": {"$ne": user.id}})
+        if existing_ht1:
+            return await interaction.response.send_message(
+                f"HT1 is already held by <@{existing_ht1['discord_id']}> in **{gm}**. Only one HT1 per gamemode is allowed.",
+                ephemeral=True,
+            )
+
+    delta = new_elo - old_elo
+    embed = discord.Embed(title="🏆 Tier Updated", color=0x34d399 if delta >= 0 else 0xf87171, timestamp=datetime.datetime.utcnow())
     embed.add_field(name="Player", value=user.mention, inline=True)
     embed.add_field(name="Staff", value=interaction.user.mention, inline=True)
     embed.add_field(name="Gamemode", value=gm, inline=True)
     embed.add_field(name="Region", value=region, inline=True)
     embed.add_field(name="IGN", value=username, inline=True)
-    embed.add_field(name="Old", value=f"{old_elo} ELO ({old_tier})", inline=True)
-    embed.add_field(name="New", value=f"{elo} ELO ({tier})", inline=True)
-    if uuid:
-        embed.set_thumbnail(url=f"https://render.crafty.gg/3d/bust/{uuid}")
+    embed.add_field(name="Old Rating", value=f"{old_elo} ELO · {old_tier}", inline=True)
+    embed.add_field(name="New Rating", value=f"{new_elo} ELO · {tier}", inline=True)
+    embed.add_field(name="Change", value=f"{'+' if delta >= 0 else ''}{delta} ELO", inline=True)
+    embed.set_thumbnail(url=user.display_avatar.url)
 
     db_mgr.players.update_one(
         {"discord_id": user.id, "gamemode": gm},
@@ -1563,7 +1575,7 @@ async def givetier(interaction: discord.Interaction, user: discord.Member, gamem
             "gamemode": gm,
             "discord_id": user.id,
             "username": username,
-            "elo": elo,
+            "elo": new_elo,
             "ts": datetime.datetime.utcnow(),
         }},
         upsert=True,
@@ -1574,7 +1586,7 @@ async def givetier(interaction: discord.Interaction, user: discord.Member, gamem
         "gamemode": gm,
         "tester_id": interaction.user.id,
         "old_elo": old_elo,
-        "new_elo": elo,
+        "new_elo": new_elo,
         "old_tier": old_tier,
         "new_tier": tier,
         "region": region,
@@ -1587,8 +1599,10 @@ async def givetier(interaction: discord.Interaction, user: discord.Member, gamem
         if region_roles_to_remove:
             await member.remove_roles(*region_roles_to_remove, reason="Region roles removed by /givetier")
 
-    await log_action("GIVETIER", f"{user.mention} ({username}): [{gm}] {old_elo}→{elo} ELO ({old_tier}→{tier})", interaction)
-    await interaction.response.send_message(embed=embed)
+    action_label = {"set": "Set", "win": "Win", "loss": "Loss"}[action]
+    await log_action(f"GIVETIER ({action_label})", f"{user.mention} ({username}): [{gm}] {old_elo}→{new_elo} ELO ({old_tier}→{tier})", interaction)
+    embed.set_footer(text=f"{action_label} by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+    await interaction.response.send_message(content=user.mention, embed=embed)
     await _update_gamemode_queue_embed(gm)
 
 
