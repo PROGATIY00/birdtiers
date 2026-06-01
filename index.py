@@ -87,6 +87,10 @@ GAMEMODE_QUEUE_CHANNELS = {
     "Neth": 1510415125419655198,
 }
 
+# --- RESULTS CHANNELS ---
+LOW_RESULTS_CHANNEL_ID = 1507057688310452274
+HIGH_RESULTS_CHANNEL_ID = 1507057657775657010
+
 class TierlistQueue:
     def __init__(self, maxQueue=20, maxTesters=5, cooldown=1440):
         self.regions = {}
@@ -1506,6 +1510,16 @@ def _ensure_player(user_id, username=None):
         return db_mgr.players.find_one({"discord_id": user_id})
     return doc
 
+async def _send_tier_result(guild, tier, content=None, embed=None):
+    tval = get_tier_value(tier)
+    chan_id = HIGH_RESULTS_CHANNEL_ID if tval >= TIER_LIMIT_LT3 else LOW_RESULTS_CHANNEL_ID
+    channel = guild.get_channel(chan_id) if guild else None
+    if channel:
+        try:
+            await channel.send(content=content, embed=embed)
+        except Exception:
+            pass
+
 @bot.tree.command(name="givetier", description="Set/add/remove ELO for a player in a gamemode (staff only)")
 @app_commands.choices(action=[
     app_commands.Choice(name="set", value="set"),
@@ -1602,7 +1616,8 @@ async def givetier(interaction: discord.Interaction, user: discord.Member, gamem
     action_label = {"set": "Set", "win": "Win", "loss": "Loss"}[action]
     await log_action(f"GIVETIER ({action_label})", f"{user.mention} ({username}): [{gm}] {old_elo}→{new_elo} ELO ({old_tier}→{tier})", interaction)
     embed.set_footer(text=f"{action_label} by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
-    await interaction.response.send_message(content=user.mention, embed=embed)
+    await _send_tier_result(interaction.guild, tier, content=user.mention, embed=embed)
+    await interaction.response.send_message(f"{action_label} done. Sent to results channel.", ephemeral=True)
     await _update_gamemode_queue_embed(gm)
 
 
@@ -1896,7 +1911,9 @@ async def win(interaction: discord.Interaction, user: discord.Member, gamemode: 
     embed.add_field(name="New", value=f"{new_elo} ELO ({new_tier})", inline=True)
     embed.add_field(name="Change", value=f"+{elo}", inline=True)
     embed.add_field(name="IGN", value=username, inline=True)
-    await interaction.response.send_message(embed=embed)
+    embed.set_footer(text=f"Win by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+    await _send_tier_result(interaction.guild, new_tier, content=user.mention, embed=embed)
+    await interaction.response.send_message(f"+{elo} ELO for {user.mention} in **{gm}**. Sent to results channel.", ephemeral=True)
     await log_action("WIN", f"{user.mention} +{elo} ELO in {gm} ({old_elo}→{new_elo})", interaction)
 
 
@@ -1938,7 +1955,9 @@ async def loss(interaction: discord.Interaction, user: discord.Member, gamemode:
     embed.add_field(name="New", value=f"{new_elo} ELO ({elo_to_tier(new_elo)})", inline=True)
     embed.add_field(name="Change", value=f"-{elo}", inline=True)
     embed.add_field(name="IGN", value=username, inline=True)
-    await interaction.response.send_message(embed=embed)
+    embed.set_footer(text=f"Loss by {interaction.user.display_name}", icon_url=interaction.user.display_avatar.url)
+    await _send_tier_result(interaction.guild, elo_to_tier(new_elo), content=user.mention, embed=embed)
+    await interaction.response.send_message(f"-{elo} ELO for {user.mention} in **{gm}**. Sent to results channel.", ephemeral=True)
     await log_action("LOSS", f"{user.mention} -{elo} ELO in {gm} ({old_elo}→{new_elo})", interaction)
 
 
@@ -2234,6 +2253,64 @@ async def alts(interaction: discord.Interaction, user: discord.Member):
         embed.set_footer(text=f"+ {len(alt_map) - 10} more alts not shown")
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="howmuch", description="Shows ELO requirements for each tier or a player's progress to next tier")
+async def howmuch(interaction: discord.Interaction, user: discord.Member = None):
+    if is_bot_offline():
+        return await interaction.response.send_message("Bot is offline by admin.", ephemeral=True)
+
+    if user:
+        embed = discord.Embed(title=f"📊 ELO Progress — {user.display_name}", color=0xff6b35, timestamp=datetime.datetime.utcnow())
+        embed.set_thumbnail(url=user.display_avatar.url)
+        has_any = False
+
+        for gm in MODES:
+            record = db_mgr.players.find_one({"discord_id": user.id, "gamemode": gm})
+            if not record or record.get("retired"):
+                continue
+            elo = record.get("elo", 0)
+            tier = elo_to_tier(elo)
+
+            next_tier_name = None
+            next_tier_elo = None
+            for lo, hi, t in ELO_TIERS:
+                if lo <= elo < hi:
+                    for lo2, hi2, t2 in ELO_TIERS:
+                        if t2 != t and lo2 >= hi:
+                            next_tier_name = t2
+                            next_tier_elo = lo2
+                            break
+                    break
+            if next_tier_name and next_tier_elo:
+                needed = next_tier_elo - elo
+                bar_len = 12
+                current_range_lo = next((l for l, h, t in ELO_TIERS if t == tier), 0)
+                current_range_hi = next((h for l, h, t in ELO_TIERS if t == tier), 1)
+                range_size = current_range_hi - current_range_lo
+                filled = min(bar_len, max(0, int((elo - current_range_lo) / range_size * bar_len))) if range_size > 0 else 0
+                progress = "\u2593" * filled + "\u2591" * (bar_len - filled)
+                value = f"`{progress}` **{elo}** / {next_tier_elo} ELO\n\u2192 Needs **{needed}** more ELO for **{next_tier_name}**"
+            else:
+                value = f"**{elo}** ELO — **{tier}** (Max tier)"
+            embed.add_field(name=f"{gm}: {tier}", value=value, inline=False)
+            has_any = True
+
+        if not has_any:
+            embed.description = "No active gamemode records for this user."
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    else:
+        embed = discord.Embed(title="📊 ELO Tier Requirements", color=0xff6b35)
+        for lo, hi, tier_name in ELO_TIERS:
+            if hi >= 100000:
+                range_str = f"{lo}+"
+            else:
+                range_str = f"{lo}–{hi}"
+            embed.add_field(name=tier_name, value=f"{range_str} ELO", inline=True)
+        embed.set_footer(text="Use /howmuch @user to see personal progress")
+        await interaction.response.send_message(embed=embed)
+
+
 
 
 
