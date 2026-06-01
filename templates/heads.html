@@ -21,7 +21,7 @@ h1 { font-size:24px; }
 <div class="card">
 <img src="{{ p.head_url }}" onerror="this.onerror=null;this.src=this.src.split('?')[0]+'?t='+Date.now();">
 <div class="name">{{ p.username }}</div>
-<div style="font-size:10px;color:#525768;">{{ p.region }} · {{ p.tier }}</div>
+<div style="font-size:10px;color:#525768;">{{ p.region }} · {{ p.tier }} ({{ p.elo }} ELO)</div>
 </div>
 {% endfor %}
 </div>

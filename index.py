@@ -56,6 +56,7 @@ GAMEMODE_ROLE_IDS = {
     "UHC": 1507060966137921637,
     "SMP": 1507061382195974366,
     "Mace": 1507060902753734827,
+    "Neth": 1507060885238190111,
 }
 
 # --- QUEUE CHANNELS PER REGION (fill in actual IDs) ---
@@ -83,6 +84,7 @@ GAMEMODE_QUEUE_CHANNELS = {
     "UHC": 1507062607641575588,
     "SMP": 1507062672473063595,
     "Mace": 1507064079683158168,
+    "Neth": 1510415125419655198,
 }
 
 class TierlistQueue:
@@ -1151,60 +1153,6 @@ async def next_in_queue(interaction: discord.Interaction):
 
 
 
-class PartnerView(discord.ui.View):
-    def __init__(self, sub_id, channel_id):
-        super().__init__(timeout=None)
-        self.sub_id = sub_id
-        self.channel_id = channel_id
-
-    async def _update(self, interaction, new_status, color):
-        await interaction.response.defer()
-        try:
-            doc = db_mgr.partners.find_one({"_id": ObjectId(self.sub_id)})
-            if not doc:
-                return await interaction.followup.send("Submission not found.", ephemeral=True)
-            db_mgr.partners.update_one({"_id": ObjectId(self.sub_id)}, {"$set": {"status": new_status}})
-            embed = interaction.message.embeds[0]
-            embed.color = color
-            old_count = len(embed.fields)
-            embed.remove_field(old_count - 1)
-            embed.add_field(name="Status", value=new_status, inline=True)
-            for child in self.children:
-                child.disabled = True
-            await interaction.edit_original_response(embed=embed, view=self)
-
-            if "Approved" in new_status and doc.get("discord_id"):
-                try:
-                    category = interaction.guild.get_channel(PARTNER_CATEGORY_ID) if interaction.guild else None
-                    if category and isinstance(category, discord.CategoryChannel):
-                        ign = doc.get("ign", "partner")
-                        member = interaction.guild.get_member(doc["discord_id"])
-                        overwrites = {
-                            interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                            interaction.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                        }
-                        if member:
-                            overwrites[member] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                        chan = await category.create_text_channel(f"partner-{ign}", overwrites=overwrites)
-                        await chan.send(f"Welcome {member.mention if member else doc.get('discord_user', '')}! Your partner application has been approved.")
-                        db_mgr.partners.update_one({"_id": ObjectId(self.sub_id)}, {"$set": {"channel_id": chan.id}})
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, custom_id="partner_accept")
-    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.manage_roles:
-            return await interaction.response.send_message("No permission.", ephemeral=True)
-        await self._update(interaction, "Approved ✅", 0x34d399)
-
-    @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger, custom_id="partner_decline")
-    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.manage_roles:
-            return await interaction.response.send_message("No permission.", ephemeral=True)
-        await self._update(interaction, "Declined ❌", 0xf87171)
-
 
 
 
@@ -1270,6 +1218,10 @@ async def tester_online(interaction: discord.Interaction, gamemodes: str):
             gchan = bot.get_channel(chan_id)
             if gchan:
                 await gchan.send(f"<@&{role_id}>", delete_after=1)
+
+    # Update gamemode queue embeds immediately
+    for gm in parsed_list:
+        await _update_gamemode_queue_embed(gm)
 
     modes_str = ", ".join(parsed_list)
     embed = discord.Embed(title="You're now online!", color=0x34d399)
@@ -1370,6 +1322,8 @@ async def tester_offline(interaction: discord.Interaction, gamemodes: str):
                     region_u = rcode
                     break
 
+    current_gms = list(existing.get("gamemodes", []))
+    
     lowered = gamemodes.strip().lower()
     if lowered == "all":
         db_mgr.tester_profiles.update_one(
@@ -1379,6 +1333,8 @@ async def tester_offline(interaction: discord.Interaction, gamemodes: str):
         if region_u:
             tier_queue.remove_tester(region_u, interaction.user.id)
             await _update_region_queue_embed(region_u)
+        for gm in current_gms:
+            await _update_gamemode_queue_embed(gm)
         await interaction.response.send_message("You're now **offline** for all gamemodes.", ephemeral=True)
         return
 
@@ -1402,12 +1358,16 @@ async def tester_offline(interaction: discord.Interaction, gamemodes: str):
         if region_u:
             tier_queue.remove_tester(region_u, interaction.user.id)
             await _update_region_queue_embed(region_u)
+        for gm in current_gms:
+            await _update_gamemode_queue_embed(gm)
         await interaction.response.send_message("All gamemodes removed. You're now **offline**.", ephemeral=True)
     else:
         db_mgr.tester_profiles.update_one(
             {"discord_id": interaction.user.id},
             {"$set": {"gamemodes": updated, "ts": datetime.datetime.utcnow()}},
         )
+        for gm in parsed:
+            await _update_gamemode_queue_embed(gm)
         await interaction.response.send_message(
             f"Went **offline** in: {', '.join(sorted(parsed))}\nStill testing: {', '.join(updated)}",
             ephemeral=True)
@@ -1672,6 +1632,7 @@ async def updateusername(interaction: discord.Interaction, user: discord.Member,
         return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
 
     player_doc = _ensure_player(user.id, user.display_name)
+    uuid = resolve_uuid(username)
     if not uuid:
         return await interaction.response.send_message("Minecraft username does not exist.", ephemeral=True)
 
@@ -1682,20 +1643,25 @@ async def updateusername(interaction: discord.Interaction, user: discord.Member,
     await interaction.response.send_message("Username successfully updated.", ephemeral=True)
 
 
-@bot.tree.command(name="updatetier", description="Updates a user's tier in the database (staff only)")
-async def updatetier(interaction: discord.Interaction, user: discord.Member, tier: str):
+@bot.tree.command(name="updatetier", description="Sets a player's ELO for a gamemode (staff only)")
+async def updatetier(interaction: discord.Interaction, user: discord.Member, gamemode: str, elo: int):
     if not interaction.user.guild_permissions.manage_roles:
         return await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
 
-    player_doc = db_mgr.players.find_one({"discord_id": user.id})
-    if not player_doc:
-        return await interaction.response.send_message("User does not exist in the database.", ephemeral=True)
+    gm = normalize_mode(gamemode)
+    if gm not in MODES:
+        return await interaction.response.send_message(f"Invalid gamemode. Valid: {', '.join(MODES)}", ephemeral=True)
 
+    player_doc = db_mgr.players.find_one({"discord_id": user.id, "gamemode": gm})
+    if not player_doc:
+        return await interaction.response.send_message("User does not have a record for this gamemode.", ephemeral=True)
+
+    tier = elo_to_tier(elo)
     db_mgr.players.update_one(
-        {"discord_id": user.id},
-        {"$set": {"tier": tier, "ts": datetime.datetime.utcnow()}},
+        {"discord_id": user.id, "gamemode": gm},
+        {"$set": {"elo": elo, "ts": datetime.datetime.utcnow()}},
     )
-    await interaction.response.send_message("Tier successfully updated in database. You will need to change their roles manually.", ephemeral=True)
+    await interaction.response.send_message(f"Set {user.display_name}'s {gm} ELO to {elo} ({tier}).", ephemeral=True)
 
 
 @bot.tree.command(name="restrict", description="Restricts a user from queuing (staff only)")
@@ -1908,10 +1874,15 @@ async def win(interaction: discord.Interaction, user: discord.Member, gamemode: 
         upsert=True,
     )
 
-    await interaction.response.send_message(
-        f"+{elo} ELO for {user.mention} in **{gm}** ({old_elo} → {new_elo}, {elo_to_tier(old_elo)} → {new_tier})",
-        ephemeral=False,
-    )
+    embed = discord.Embed(title="ELO Added (Win)", color=0x34d399, timestamp=datetime.datetime.utcnow())
+    embed.add_field(name="Player", value=user.mention, inline=True)
+    embed.add_field(name="Staff", value=interaction.user.mention, inline=True)
+    embed.add_field(name="Gamemode", value=gm, inline=True)
+    embed.add_field(name="Old", value=f"{old_elo} ELO ({elo_to_tier(old_elo)})", inline=True)
+    embed.add_field(name="New", value=f"{new_elo} ELO ({new_tier})", inline=True)
+    embed.add_field(name="Change", value=f"+{elo}", inline=True)
+    embed.add_field(name="IGN", value=username, inline=True)
+    await interaction.response.send_message(embed=embed)
     await log_action("WIN", f"{user.mention} +{elo} ELO in {gm} ({old_elo}→{new_elo})", interaction)
 
 
@@ -1945,10 +1916,15 @@ async def loss(interaction: discord.Interaction, user: discord.Member, gamemode:
         upsert=True,
     )
 
-    await interaction.response.send_message(
-        f"-{elo} ELO for {user.mention} in **{gm}** ({old_elo} → {new_elo}, {elo_to_tier(old_elo)} → {elo_to_tier(new_elo)})",
-        ephemeral=False,
-    )
+    embed = discord.Embed(title="ELO Deducted (Loss)", color=0xf87171, timestamp=datetime.datetime.utcnow())
+    embed.add_field(name="Player", value=user.mention, inline=True)
+    embed.add_field(name="Staff", value=interaction.user.mention, inline=True)
+    embed.add_field(name="Gamemode", value=gm, inline=True)
+    embed.add_field(name="Old", value=f"{old_elo} ELO ({elo_to_tier(old_elo)})", inline=True)
+    embed.add_field(name="New", value=f"{new_elo} ELO ({elo_to_tier(new_elo)})", inline=True)
+    embed.add_field(name="Change", value=f"-{elo}", inline=True)
+    embed.add_field(name="IGN", value=username, inline=True)
+    await interaction.response.send_message(embed=embed)
     await log_action("LOSS", f"{user.mention} -{elo} ELO in {gm} ({old_elo}→{new_elo})", interaction)
 
 
@@ -2285,7 +2261,7 @@ def home():
             users[u] = {
                 "u": u, "tiers": [], "kits": [], "reg": reg,
                 "reg_c": REGION_COLORS.get(reg, "#fff"),
-                "mode_tier": "N/A", "head_url": get_player_head_url(u, 32)
+                "mode_tier": "N/A", "mode_elo": 0, "head_url": get_player_head_url(u, 32)
             }
 
         users[u]["kits"].append(r)
@@ -2294,6 +2270,7 @@ def home():
             cur = users[u].get("mode_tier")
             if cur == "N/A" or get_tier_value(n_tier) > get_tier_value(cur):
                 users[u]["mode_tier"] = n_tier
+                users[u]["mode_elo"] = elo_val
 
         if not r.get('retired'):
             users[u]["tiers"].append(n_tier)
@@ -2354,9 +2331,11 @@ def home():
                     stored_peak = normalize_tier(kit_item.get("peak_tier") or kt)
                     kv = get_tier_value(kt)
                     if km not in peak_by_mode or kv > peak_by_mode[km]["tier_value"]:
+                        kit_elo = kit_item.get("elo", 0)
                         peak_by_mode[km] = {
                             "gamemode": km,
                             "tier": kt,
+                            "elo": kit_elo,
                             "tier_value": kv,
                             "peak_tier": stored_peak,
                         }
@@ -2679,11 +2658,13 @@ def head_status():
     for r in raw:
         u = r["username"]
         if u not in seen:
+            elo_val = r.get("elo", 0)
             seen[u] = {
                 "username": u,
                 "head_url": get_player_head_url(u, 64),
                 "region": r.get("region", "NA").strip().upper(),
-                "tier": normalize_tier(r.get("tier")),
+                "tier": normalize_tier(elo_to_tier(elo_val)),
+                "elo": elo_val,
             }
     players = list(seen.values())[:100]
     player_count = len(players)

@@ -1,42 +1,118 @@
 {% extends "base.html" %}
 {% block title %}MagmaTIERS{% endblock %}
+{% block extra_head %}
+<style>
+  .premium-modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.88);display:flex;justify-content:center;align-items:center;z-index:2000;backdrop-filter:blur(12px)}
+  .premium-card{width:440px;max-width:94vw;background:linear-gradient(145deg,#0f1119,#151822);border-radius:28px;border:1px solid rgba(255,255,255,.06);overflow:hidden;position:relative;box-shadow:0 30px 80px rgba(0,0,0,.7),0 0 0 1px rgba(255,69,0,.15),inset 0 1px 0 rgba(255,255,255,.04);animation:premFadeIn .35s ease}
+  @keyframes premFadeIn{from{opacity:0;transform:scale(.92) translateY(20px)}to{opacity:1;transform:scale(1) translateY(0)}}
+  .premium-glow{position:absolute;top:-120px;right:-120px;width:320px;height:320px;border-radius:50%;background:radial-gradient(circle,rgba(255,69,0,.15),transparent 70%);pointer-events:none;z-index:0}
+  .premium-glow2{position:absolute;bottom:-100px;left:-100px;width:280px;height:280px;border-radius:50%;background:radial-gradient(circle,rgba(0,212,255,.08),transparent 70%);pointer-events:none;z-index:0}
+  .premium-header{position:relative;z-index:1;background:linear-gradient(180deg,rgba(26,30,42,.9) 0,rgba(15,17,25,.95) 100%);padding:40px 24px 28px;text-align:center;border-bottom:1px solid rgba(255,255,255,.04)}
+  .premium-header::after{content:'';position:absolute;bottom:0;left:10%;right:10%;height:1px;background:linear-gradient(90deg,transparent,rgba(255,69,0,.4),transparent)}
+  .premium-avatar-ring{width:116px;height:116px;border-radius:50%;margin:0 auto 16px;padding:4px;position:relative;box-shadow:0 0 30px rgba(255,69,0,.25),inset 0 0 30px rgba(0,0,0,.5);animation:premSpin 6s linear infinite}
+  @keyframes premSpin{to{transform:rotate(360deg)}}
+  .premium-avatar-ring .inner{position:absolute;inset:4px;border-radius:50%;background:#0f1119;display:flex;align-items:center;justify-content:center;animation:premSpin 6s linear infinite reverse}
+  .premium-avatar-ring .inner img{width:96px;height:96px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.08)}
+  .premium-username{margin:0;font-size:2rem;font-weight:800;letter-spacing:-.02em;background:linear-gradient(135deg,#fff 40%,rgba(255,255,255,.7));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  .premium-badge-row{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;flex-wrap:wrap}
+  .premium-rank-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 18px;border-radius:999px;background:linear-gradient(135deg,rgba(255,215,0,.12),rgba(255,215,0,.05));border:1px solid rgba(255,215,0,.3);color:#ffd700;font-weight:800;font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;box-shadow:0 0 20px rgba(255,215,0,.08)}
+  .premium-region-tag{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);color:rgba(255,255,255,.5);font-size:.8rem;font-weight:600}
+  .premium-link-btn{display:inline-flex;align-items:center;gap:8px;margin-top:16px;padding:10px 20px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:rgba(255,255,255,.6);text-decoration:none;font-size:.85rem;font-weight:600;transition:.2s}
+  .premium-link-btn:hover{background:rgba(255,69,0,.12);border-color:rgba(255,69,0,.3);color:#fff;transform:translateY(-1px)}
+  .premium-body{position:relative;z-index:1;padding:24px}
+  .premium-section{margin-bottom:22px}
+  .premium-section:last-child{margin-bottom:0}
+  .premium-section-header{display:flex;align-items:center;gap:10px;margin-bottom:14px;font-size:.7rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:rgba(255,255,255,.3)}
+  .premium-section-header::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,rgba(255,255,255,.08),transparent)}
+  .premium-leaderboard{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:6px;overflow:hidden}
+  .premium-lb-row{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:12px;transition:.2s}
+  .premium-lb-row+.premium-lb-row{border-top:1px solid rgba(255,255,255,.03)}
+  .premium-lb-row:hover{background:rgba(255,255,255,.03)}
+  .premium-lb-icon{width:32px;height:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0}
+  .premium-lb-icon.pos{background:rgba(255,69,0,.12);color:{{spot.placement_color}}}
+  .premium-lb-icon.cat{background:rgba(0,212,255,.1);color:#00d4ff}
+  .premium-lb-icon.score{background:rgba(255,215,0,.1);color:#ffd700}
+  .premium-lb-label{flex:1;font-size:.85rem;font-weight:600;color:rgba(255,255,255,.5)}
+  .premium-lb-value{font-size:1.05rem;font-weight:800;color:#fff}
+  .premium-skills{display:flex;flex-direction:column;gap:8px}
+  .premium-skill-row{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.015);border:1px solid rgba(255,255,255,.04);transition:.2s;cursor:default}
+  .premium-skill-row:hover{background:rgba(255,255,255,.03);border-color:rgba(255,69,0,.15);transform:translateX(4px)}
+  .premium-skill-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden}
+  .premium-skill-icon img{width:22px;height:22px;object-fit:contain;filter:brightness(0) invert(.7)}
+  .premium-skill-row:hover .premium-skill-icon img{filter:brightness(0) invert(1)}
+  .premium-skill-name{flex:1;font-size:.88rem;font-weight:700;color:rgba(255,255,255,.8)}
+  .premium-skill-tier{font-size:.82rem;font-weight:800;padding:4px 12px;border-radius:8px;background:rgba(255,69,0,.1);border:1px solid rgba(255,69,0,.15);color:#ff6b35;transition:.2s}
+  .premium-skill-row:hover .premium-skill-tier{background:rgba(255,69,0,.18);border-color:rgba(255,69,0,.35);box-shadow:0 0 16px rgba(255,69,0,.12)}
+  .premium-skill-elo{font-size:.7rem;color:rgba(255,255,255,.25);margin-left:4px;font-weight:500}
+  .premium-skill-row.retired{opacity:.35;filter:grayscale(1)}
+  .premium-skill-row.top-mode{border-color:rgba(255,215,0,.25);background:linear-gradient(90deg,rgba(255,215,0,.04),transparent)}
+  .premium-skill-row.top-mode .premium-skill-tier{background:rgba(255,215,0,.12);border-color:rgba(255,215,0,.25);color:#ffd700}
+  .premium-skill-row.top-mode:hover .premium-skill-tier{box-shadow:0 0 20px rgba(255,215,0,.15)}
+  .premium-close{position:absolute;top:16px;right:16px;z-index:5;width:36px;height:36px;border-radius:50%;border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.4);color:rgba(255,255,255,.3);font-size:1.1rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.2s}
+  .premium-close:hover{background:rgba(255,69,0,.15);border-color:rgba(255,69,0,.3);color:#fff}
+  @media(max-width:500px){.premium-header{padding:28px 16px 20px}.premium-body{padding:16px}.premium-username{font-size:1.5rem}.premium-avatar-ring{width:92px;height:92px}.premium-avatar-ring .inner img{width:76px;height:76px}}
+</style>
+{% endblock %}
 {% block content %}
 {% if spot %}
-<div class="modal-bg" onclick="window.location.href='/?mode={{m}}'">
-    <div class="profile-card" onclick="event.stopPropagation()">
-        <div class="profile-header">
-            <div class="profile-avatar-wrapper" style="border-color:{{ spot.placement_color }};">
-                <img src="{{ spot.head_url }}" class="profile-avatar">
-            </div>
-            <h2 class="profile-name">{{ spot.u }}</h2>
-            <div class="profile-rank">🏆 {{ spot.rank }}</div>
-            <div class="profile-region">{{ spot.region_name }}</div>
-            <a class="name-mc-button" href="https://namemc.com/profile/{{ spot.u }}" target="_blank">NameMC</a>
+<div class="premium-modal" onclick="window.location.href='/?mode={{m}}'">
+  <div class="premium-card" onclick="event.stopPropagation()">
+    <div class="premium-glow"></div>
+    <div class="premium-glow2"></div>
+    <a class="premium-close" href="/?mode={{m}}" onclick="event.stopPropagation()">✕</a>
+    <div class="premium-header">
+      <div class="premium-avatar-ring">
+        <div class="inner">
+          <img src="{{ spot.head_url }}" alt="{{ spot.u }}">
         </div>
-        <div class="profile-body">
-            <div class="profile-section">
-                <h3>POSITION</h3>
-                <div class="position-box">
-                    <div class="position-number" style="color:{{ spot.placement_color }};">#{{ spot.position }}</div>
-                    <div style="font-weight:800;">{{ spot.position_label }} · {{ spot.best }}</div>
-                    <div style="color:#9ba3af;">({{ spot.score }} pts)</div>
-                </div>
-            </div>
-            <div class="profile-section">
-                <h3>TIERS</h3>
-                <div class="tier-grid">
-                    {% for k in spot.kits %}
-                    <div class="tier-card{% if k.retired %} retired{% endif %}{% if k.top_mode %} top-mode{% endif %}">
-                        <div class="peak-tooltip">{{ k.peak_label }}</div>
-                        <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" class="tier-icon-img" onerror="this.onerror=null;this.src='{{ default_icon_url }}';">
-                        <div class="tier-label">{{ k.gamemode }}</div>
-                        <div class="tier-subtext">{{ k.tier }}</div>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
+      </div>
+      <h2 class="premium-username">{{ spot.u }}</h2>
+      <div class="premium-badge-row">
+        <span class="premium-rank-badge">🏆 {{ spot.rank }}</span>
+        <span class="premium-region-tag">🌍 {{ spot.region_name }}</span>
+      </div>
+      <a class="premium-link-btn" href="https://namemc.com/profile/{{ spot.u }}" target="_blank">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        NameMC
+      </a>
     </div>
+    <div class="premium-body">
+      <div class="premium-section">
+        <div class="premium-section-header">Leaderboard</div>
+        <div class="premium-leaderboard">
+          <div class="premium-lb-row">
+            <div class="premium-lb-icon pos">🏆</div>
+            <span class="premium-lb-label">Position</span>
+            <span class="premium-lb-value" style="color:{{spot.placement_color}};">#{{ spot.position }}</span>
+          </div>
+          <div class="premium-lb-row">
+            <div class="premium-lb-icon cat">📂</div>
+            <span class="premium-lb-label">Category</span>
+            <span class="premium-lb-value">{{ spot.position_label }}</span>
+          </div>
+          <div class="premium-lb-row">
+            <div class="premium-lb-icon score">⭐</div>
+            <span class="premium-lb-label">Score</span>
+            <span class="premium-lb-value">{{ spot.score }} <span style="font-size:.7rem;font-weight:600;color:rgba(255,255,255,.3);">pts</span></span>
+          </div>
+        </div>
+      </div>
+      <div class="premium-section">
+        <div class="premium-section-header">Skills &amp; Tiers</div>
+        <div class="premium-skills">
+          {% for k in spot.kits %}
+          <div class="premium-skill-row{% if k.retired %} retired{% endif %}{% if k.top_mode %} top-mode{% endif %}">
+            <div class="premium-skill-icon">
+              <img src="{{ mode_icon_urls.get(k.gamemode, default_icon_url) }}" onerror="this.onerror=null;this.src='{{ default_icon_url }}';" alt="{{ k.gamemode }}">
+            </div>
+            <span class="premium-skill-name">{{ k.gamemode }}</span>
+            <span class="premium-skill-tier">{{ k.tier }}<span class="premium-skill-elo">{{ k.elo }}</span></span>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 {% endif %}
 
@@ -63,7 +139,7 @@
         <img src="{{ p.head_url }}" onerror="this.src='https://minotar.net/helm/Steve/32';">
         <div>{{ p.u }} <span class="badge" style="color:{{ p.rank_c }};margin-left:10px;">{{ p.rank }}</span></div>
         <div class="reg-tag" style="color:{{ p.reg_c }}">{{ p.reg }}</div>
-        <div style="text-align:right;color:var(--accent);font-weight:800;">{{ p.mode_tier if m else p.best }}</div>
+        <div style="text-align:right;color:var(--accent);font-weight:800;">{{ p.mode_tier if m else p.best }}{% if m and p.mode_elo %} ({{ p.mode_elo }} ELO){% endif %}</div>
     </a>
     {% endfor %}
 </div>
