@@ -23,6 +23,7 @@ TIER_LOG_CHANNEL_ID = 1502966105940164638
 QUEUE_CHANNEL_ID = 1507057131436642334
 STATUS_CHANNEL_ID = 1497989003721310249
 TESTER_NOTIF_CHANNEL_ID = 1507062245366956134
+SHUTDOWN_TIME = datetime.datetime(2026, 6, 17, 23, 59, 59)
 CLAIM_CHANNEL_ID = 1504206348324311131
 PARTNER_CHANNEL_ID = 1502975682513473787
 PARTNER_CATEGORY_ID = 1498359340065624165
@@ -464,7 +465,19 @@ def _is_service_offline(service_name: str) -> bool:
 
 
 def is_web_offline() -> bool:
-    return _is_service_offline("web")
+    if _is_service_offline("web"):
+        return True
+    if datetime.datetime.utcnow() >= SHUTDOWN_TIME:
+        try:
+            db_mgr.settings.update_one(
+                {"_id": "offline_mode"},
+                {"$set": {"services.web": True, "shutdown_reason": "Countdown expired"}},
+                upsert=True,
+            )
+        except Exception:
+            pass
+        return True
+    return False
 
 
 def is_bot_offline() -> bool:
@@ -2323,10 +2336,14 @@ async def howmuch(interaction: discord.Interaction, user: discord.Member = None)
 # --- WEB UI ---
 app = Flask(__name__)
 
+@app.context_processor
+def inject_globals():
+    return {"shutdown_time_ts": int(SHUTDOWN_TIME.timestamp())}
+
 @app.route('/')
 def home():
     if is_web_offline():
-        return "<html><head><title>MagmaTIERS</title></head><body style='font-family:Arial;background:#0b0c10;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;'><h1>Website is offline by admin.</h1></body></html>", 503
+        return "<html><head><title>MagmaTIERS</title></head><body style='font-family:Arial;background:#0b0c10;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column;gap:16px'><h1 style='color:#ff4500'>This website has been shut down.</h1><p style='color:#9ba3af'>The countdown has expired.</p></body></html>", 503
     maint = is_maintenance_active()
 
     if maint.get('active'):
